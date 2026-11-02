@@ -13,7 +13,8 @@
     "check": "tsc --noEmit -p tsconfig.json",
     "pretest": "pnpm run build",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
-    "prepack": "pnpm run build"
+    "prepack": "pnpm run build",
+    "prepublishOnly": "pnpm run check && pnpm test"
   },
   "keywords": [
     "gentle-shell",
@@ -22,10 +23,27 @@
     "extension",
     "retry",
     "429",
-    "timeout"
+    "timeout",
+    "rate-limit",
+    "backoff"
   ],
-  "author": "",
+  "author": "Andrik <andrik.sc02@gmail.com>",
   "license": "MIT",
+  "homepage": "https://github.com/andrikonbeat/gentle-retry#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andrikonbeat/gentle-retry.git"
+  },
+  "bugs": {
+    "url": "https://github.com/andrikonbeat/gentle-retry/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "packageManager": "pnpm@11.26.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },
