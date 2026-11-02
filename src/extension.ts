@@ -6,8 +6,14 @@ import type {
 	ExtensionContext,
 	ProjectedSessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { resolveRetryPolicy, writeRetryPolicy } from "./retry-policy.js";
+import { gentlePiConfigHome, resolveRetryPolicy, writeRetryPolicy } from "./retry-policy.js";
 import { classifyTransientFailure, TRANSIENT_FAILURE_LABEL } from "./retry-classification.js";
+import {
+	ONBOARDING_MESSAGE,
+	readOnboardingMarker,
+	shouldAnnounceOnboarding,
+	writeOnboardingMarker,
+} from "./retry-onboarding.js";
 import { guardExtensionEvents } from "./stale-context.js";
 
 const RETRY_STATUS_TEXT = "Unlimited retry on 429/timeout";
@@ -156,6 +162,31 @@ function createRetryCommand() {
 }
 
 /**
+ * Introduces the extension once per install. Pi has no load-time event and no
+ * per-install state, so this runs on `session_start` and remembers itself in a
+ * marker file inside the config home.
+ */
+function announceOnboarding(ctx: ExtensionContext): void {
+	if (!ctx.hasUI || !ctx.ui?.notify) return;
+	const policy = resolveRetryPolicy(ctx.cwd);
+	let configHome: string;
+	try {
+		configHome = gentlePiConfigHome();
+	} catch {
+		return;
+	}
+	const marker = readOnboardingMarker(configHome);
+	if (!shouldAnnounceOnboarding({ policy: policy.policy, hasUI: true, marker })) return;
+	ctx.ui.notify(ONBOARDING_MESSAGE, "info");
+	try {
+		writeOnboardingMarker(configHome);
+	} catch {
+		// A read-only home must not break the session; the worst case is one more
+		// greeting, which is better than a failed start.
+	}
+}
+
+/**
  * Runs after Pi has exhausted its own retry budget and before the run settles.
  * The failed attempt is still the last assistant message in the projection.
  */
@@ -216,6 +247,7 @@ export function createGentleRetryExtension(): (pi: ExtensionAPI) => void {
 			description: "Unlimited retry on HTTP 429 and timeout",
 			handler: createRetryCommand(),
 		});
+		guarded.on("session_start", (_event, ctx) => announceOnboarding(ctx));
 		guarded.on("agent_before_settle", agentBeforeSettleHandler);
 	};
 }

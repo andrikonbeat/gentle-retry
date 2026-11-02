@@ -27,7 +27,7 @@ export interface ResolvedRetryPolicy {
 	malformed?: true;
 }
 
-function gentlePiConfigHome(): string {
+export function gentlePiConfigHome(): string {
 	const env = process.env.GENTLE_PI_CONFIG_HOME;
 	if (env) return resolve(env);
 	return join(homedir(), ".pi", "gentle-ai");

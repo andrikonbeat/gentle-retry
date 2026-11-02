@@ -292,3 +292,33 @@ test("agent_before_settle does nothing when the failed assistant entry is missin
 	assert.equal(h.notices.length, 0);
 	h.cleanup();
 });
+
+async function startSession(h: ReturnType<typeof harness>, ctx: ExtensionContext = h.ctx) {
+	for (const fn of h.handlers.get("session_start") ?? []) await fn({ type: "session_start", reason: "startup" }, ctx);
+}
+
+test("session_start introduces the extension once and then stays silent", async () => {
+	const h = harness();
+	await startSession(h);
+	assert.equal(h.notices.length, 1);
+	assert.match(h.notices[0]!, /\/gentle:retry enable/);
+	await startSession(h);
+	assert.equal(h.notices.length, 1);
+	h.cleanup();
+});
+
+test("session_start stays silent without a UI so scripted modes are not polluted", async () => {
+	const h = harness();
+	await startSession(h, { ...h.ctx, hasUI: false, mode: "print" } as unknown as ExtensionContext);
+	assert.equal(h.notices.length, 0);
+	h.cleanup();
+});
+
+test("session_start stays silent when retry is already enabled", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("enable", h.ctx);
+	h.notices.length = 0;
+	await startSession(h);
+	assert.equal(h.notices.length, 0);
+	h.cleanup();
+});
