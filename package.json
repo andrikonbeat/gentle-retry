@@ -1,0 +1,42 @@
+{
+  "name": "gentle-retry",
+  "version": "0.1.0",
+  "description": "Unlimited retry on HTTP 429 and timeout for Gentle Shell and Pi Coding Agent",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "pretest": "pnpm run build",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "prepack": "pnpm run build"
+  },
+  "keywords": [
+    "gentle-shell",
+    "pi-coding-agent",
+    "pi-package",
+    "extension",
+    "retry",
+    "429",
+    "timeout"
+  ],
+  "author": "",
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.4.0"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/extension.js"
+    ]
+  }
+}
