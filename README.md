@@ -1,43 +1,84 @@
 # gentle-retry
 
-Unlimited retry on HTTP 429 and timeout for [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell) and [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent).
+Unlimited retry on HTTP 429 and timeout for [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
 
-## What it does
+Pi already retries transient failures a few times with its own backoff. When that
+budget runs out, the run stops and the work in progress stops with it. This
+extension keeps the run alive instead: it waits, asks again with the same
+conversation, and repeats for as long as the cause stays transient.
 
-Pi already retries transient failures a few times (3 by default) with its own backoff. When that budget is exhausted, this extension keeps the agent run alive instead of stopping:
-
-1. It reads the final failure from the assistant message.
-2. If it is an **HTTP 429 / rate limit** or a **timeout**, it waits with exponential backoff (abortable with **Escape**).
-3. It omits the failed assistant attempt from the model context and asks Pi for one more request with the same conversation.
-
-**Never retries** quota errors, billing limits, authentication failures, or any non-transient error.
+It never retries quota, billing or authentication failures. Waiting does not fix
+those, and pretending otherwise only wastes your time.
 
 ## Install
 
 ```bash
-# From npm (when published)
 pi install npm:gentle-retry
-
-# From a local checkout
-pi install /path/to/gentle-retry
-
-# Try it for one invocation only
-pi -e /path/to/gentle-retry
 ```
 
-`pnpm add -g gentle-retry` **does not** register an extension with Pi. Use `pi install` or place the extension under `~/.pi/agent/extensions/`.
-
-## Usage
-
-After installation the extension loads automatically and starts **off**. Configure it from a Gentle Shell / Pi session:
+Try it without installing:
 
 ```bash
-/gentle:retry enable    # Turn on unlimited retry
-/gentle:retry status    # Show current state and the config file in use
-/gentle:retry disable   # Turn off (back to Pi's default retry budget)
+pi -e npm:gentle-retry
 ```
 
-Or create the config file manually:
+From a local checkout:
+
+```bash
+pi install /path/to/gentle-retry
+```
+
+Requirements: Pi Coding Agent 1.4.0 or newer, Node 22.19 or newer.
+
+> `pnpm add -g gentle-retry` does not register an extension with Pi. Use
+> `pi install`, or drop it under `~/.pi/agent/extensions/`.
+
+## First run
+
+The extension installs **off**. That is deliberate: an unlimited retry loop
+should never switch itself on without you asking. The first time it loads in a
+project it says so, once, and names the command that turns it on:
+
+```
+gentle-retry installed — OFF. Tailored for HTTP 429 and timeouts:
+/gentle:retry enable keeps a run alive instead of stopping.
+```
+
+The notice appears once per machine and never again. Scripted and headless runs
+never see it.
+
+## Commands
+
+```
+/gentle:retry enable     # keep runs alive through 429 and timeouts
+/gentle:retry disable    # back to Pi's own retry budget
+/gentle:retry status     # current state, and which config file decided it
+```
+
+## What it retries
+
+| Cause | Retried |
+| --- | --- |
+| HTTP 429, rate limit, throttling | yes |
+| Timeout, deadline exceeded, dropped connection | yes |
+| Quota exhausted, billing, credit or spending limit | no |
+| Authentication, authorization, any other error | no |
+
+When a retry happens you see which failure it is waiting on, how long, and how
+many attempts have already failed:
+
+```
+Retry 3 (HTTP 429 / rate limit) — waiting 7s… Press Esc to stop.
+```
+
+Press **Escape** at any moment to stop the wait.
+
+## Configuration
+
+The safe default is off. Both files are optional, and the project file wins:
+
+- Project: `<project>/.pi/gentle-ai/retry-policy.json`
+- Global: `~/.pi/gentle-ai/retry-policy.json`, or `$GENTLE_PI_CONFIG_HOME/retry-policy.json`
 
 ```json
 {
@@ -48,44 +89,58 @@ Or create the config file manually:
 }
 ```
 
-**Locations (project file wins over global):**
-- Project: `<cwd>/.pi/gentle-ai/retry-policy.json`
-- Global: `~/.pi/gentle-ai/retry-policy.json` (or `$GENTLE_PI_CONFIG_HOME/retry-policy.json`)
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `policy` | `"off"` | `"on"` or `"off"`. Anything else fails closed. |
+| `baseDelayMs` | `2000` | First wait, in milliseconds. |
+| `maxDelayMs` | `60000` | Ceiling for the growing wait. |
 
-Defaults: `policy: "off"`, `baseDelayMs: 2000`, `maxDelayMs: 60000`.
+Each attempt multiplies the wait by 1.8 with up to 10% jitter, up to
+`maxDelayMs`. The two delay fields survive `enable` and `disable` cycles.
+
+A missing, unreadable, malformed or unknown-schema file is treated as `off`.
+Typos fail loudly instead of silently changing your retry behaviour.
 
 ## How it works
 
-| Boundary | What happens |
-|----------|--------------|
-| `agent_before_settle` | Runs after Pi has exhausted its own retry budget. On a transient failure it notifies, waits with growing delay, appends a `context_edit` that omits the failed assistant entry and its tool results, and returns `continue: true`. |
+The extension hooks the moment Pi has exhausted its own retries and is about to
+settle the run. If the last assistant message carries a transient provider error,
+it waits with exponential backoff, then asks Pi for one more provider request
+with the same conversation.
 
-Pi then issues one more provider request with the same conversation. The extension does not create a new user prompt.
+The failed assistant message, and any tool results it produced, are omitted from
+the model context first — the same recovery Pi performs on its own retries — so
+the model never sees a half-written turn. No new user prompt is created and your
+conversation is untouched.
 
-## Behavior details
+The attempt counter resets on a completed turn, an abort, a non-transient
+failure, or a session change.
 
-- **Fail closed**: missing, malformed, or unreadable config file → `off`
-- **Project override**: `<cwd>/.pi/gentle-ai/retry-policy.json` wins over global
-- **Delay knobs** (`baseDelayMs`, `maxDelayMs`) survive enable/disable cycles
-- **Escape** interrupts the wait through Pi's run abort signal
-- **No duplicate retries**: the extension only acts once Pi's native retries are done
-- **Reset**: the attempt counter resets on a completed settle, an abort, or a non-transient failure
+## Troubleshooting
 
-## Requirements
+Known behaviours and fixes: **[docs/troubleshooting.md](docs/troubleshooting.md)**.
 
-- `@earendil-works/pi-coding-agent` 1.4.0 or newer (the package declares the host with the `*` peer range, as Pi requires)
-- Gentle Shell (bundled with Pi) or Pi Coding Agent
+Most common surprises:
+
+- Installed but silent → it is off; run `/gentle:retry enable`.
+- Still stopping on a failure → it was classified as non-transient, on purpose.
+- Project file ignored → it is malformed; `/gentle:retry status` says `malformed`.
 
 ## Development
 
 ```bash
 pnpm install
-pnpm run check      # TypeScript check
-pnpm test           # Builds to dist/ and runs the tests
-pnpm run build      # Build to dist/
+pnpm run check     # TypeScript check
+pnpm test          # builds to dist/, then runs the suite
+pnpm run build     # build to dist/
 ```
 
-The tests exercise the real `agent_before_settle` event shape and Pi's real extension loader, so a passing suite means the built artifact loads and sees provider errors the same way Pi emits them.
+The suite exercises the real `agent_before_settle` event shape and Pi's real
+extension loader, so a green run means the built artifact loads and reads
+provider errors the way Pi emits them.
+
+Maintainers: release steps live in [docs/release.md](docs/release.md), and
+changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
