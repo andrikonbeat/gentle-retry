@@ -16,10 +16,13 @@ was pointing at. The notice never repeats.
 ## It still stops after a failure
 
 Check the failure text. gentle-retry only acts once Pi has exhausted its own
-retry budget, and only for two causes:
+retry budget, and only for transient causes:
 
 - HTTP 429 or any message that reads as a rate limit or throttle.
-- A timeout, a deadline, or a dropped connection.
+- A timeout, a deadline, a dropped connection, or a connection error.
+- HTTP 502 or Bad Gateway.
+- A stream that ended without `finish_reason`.
+- HTTP 400 only when the message says `DEGRADED function cannot be invoked`.
 
 Everything else is left to Pi on purpose. In particular these are **never**
 retried, because waiting does not fix them and only burns time:
@@ -29,6 +32,7 @@ retried, because waiting does not fix them and only burns time:
 - `monthly_usage_limit`, `subscription_sharing`, `plan_limit`
 - `payment_required`, `upgrade_required`
 - Authentication and authorization failures
+- Generic HTTP 400 failures that are not the named degraded-function condition
 
 `/gentle:retry status` reporting `ON` while a run dies immediately means the
 failure was classified as non-transient. That is the intended behaviour.
@@ -64,9 +68,14 @@ visible, not silently ignored.
 
 ## The wait is too long, or too short
 
-`baseDelayMs` is the first wait; each attempt multiplies it by 1.8, with up to
-10% jitter, until `maxDelayMs` is reached. Defaults are 2000 and 60000, so the
-sequence is roughly 2s, 3.6s, 6.5s, 11s, 21s, 38s, then 60s onward.
+`baseDelayMs` is the first wait; each attempt multiplies the exponential delay by
+1.8. Jitter is up to 10% of that current delay, and the final wait is capped
+at `maxDelayMs`. Defaults are 2000 and 60000, so the sequence is roughly 2s,
+3.6s, 6.5s, 11s, 21s, 38s, then 60s onward.
+
+If the provider error includes a usable `Retry-After` value, the provider value
+controls the wait instead. It is capped at `maxDelayMs`; malformed or unknown
+values fall back to the exponential backoff above.
 
 ```json
 { "schema": "gentle-pi.retry/v1", "policy": "on", "baseDelayMs": 1000, "maxDelayMs": 30000 }
@@ -83,8 +92,9 @@ immediately, and the attempt counter resets with it.
 ## The counter restarted
 
 The attempt counter resets when a turn completes, when you abort, when the
-failure is not transient, and on a session change. So the first retry after a
-successful turn waits the base delay again instead of the long tail.
+failure is not transient, when the retry policy changes, and on a session
+change. So the first retry after a successful turn waits the base delay again
+instead of the long tail.
 
 ## After `/reload`, `/new` or `/resume` I saw no error but no retry either
 

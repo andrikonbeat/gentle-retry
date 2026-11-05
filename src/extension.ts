@@ -7,7 +7,7 @@ import type {
 	ProjectedSessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { gentlePiConfigHome, resolveRetryPolicy, writeRetryPolicy } from "./retry-policy.js";
-import { classifyTransientFailure, TRANSIENT_FAILURE_LABEL } from "./retry-classification.js";
+import { classifyTransientFailure, parseRetryAfterMs, TRANSIENT_FAILURE_LABEL } from "./retry-classification.js";
 import {
 	ONBOARDING_MESSAGE,
 	readOnboardingMarker,
@@ -43,9 +43,9 @@ function nextAttempt(ctx: ExtensionContext): number {
 }
 
 function retryDelayMs(attempt: number, base: number, max: number): number {
-	const jitter = base * 0.1 * Math.random();
-	const delay = Math.min(base * Math.pow(1.8, attempt - 1) + jitter, max);
-	return Math.round(delay);
+	const exponential = base * Math.pow(1.8, attempt - 1);
+	const jitter = exponential * 0.1 * Math.random();
+	return Math.round(Math.min(exponential + jitter, max));
 }
 
 function formatDelay(delayMs: number): string {
@@ -194,6 +194,10 @@ async function agentBeforeSettleHandler(
 	event: AgentBeforeSettleEvent,
 	ctx: ExtensionContext,
 ): Promise<AgentBeforeSettleEventResult | void> {
+	if (event.outcome !== "error") {
+		resetAttempts(ctx);
+		return;
+	}
 	const policy = resolveRetryPolicy(ctx.cwd);
 	if (policy.policy !== "on") {
 		resetAttempts(ctx);
@@ -210,7 +214,10 @@ async function agentBeforeSettleHandler(
 		return;
 	}
 	const attempt = nextAttempt(ctx);
-	const delayMs = retryDelayMs(attempt, policy.baseDelayMs, policy.maxDelayMs);
+	const retryAfterMs = parseRetryAfterMs(failed.errorMessage);
+	const delayMs = retryAfterMs === undefined
+		? retryDelayMs(attempt, policy.baseDelayMs, policy.maxDelayMs)
+		: Math.min(retryAfterMs, policy.maxDelayMs);
 	ctx.ui.notify(
 		`Retry ${attempt} (${TRANSIENT_FAILURE_LABEL[kind]}) — waiting ${formatDelay(delayMs)}… Press Esc to stop.`,
 	);

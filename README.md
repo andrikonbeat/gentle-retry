@@ -1,14 +1,15 @@
 # gentle-retry
 
-Unlimited retry on HTTP 429 and timeout for [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
+Unlimited retry for transient provider failures in [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
 
 Pi already retries transient failures a few times with its own backoff. When that
 budget runs out, the run stops and the work in progress stops with it. This
 extension keeps the run alive instead: it waits, asks again with the same
 conversation, and repeats for as long as the cause stays transient.
 
-It never retries quota, billing or authentication failures. Waiting does not fix
-those, and pretending otherwise only wastes your time.
+It never retries quota, billing, payment, upgrade, authentication, or
+authorization failures. Waiting does not fix those, and pretending otherwise
+only wastes your time.
 
 ## Install
 
@@ -61,8 +62,17 @@ never see it.
 | --- | --- |
 | HTTP 429, rate limit, throttling | yes |
 | Timeout, deadline exceeded, dropped connection | yes |
-| Quota exhausted, billing, credit or spending limit | no |
+| Connection error | yes |
+| HTTP 502 or Bad Gateway | yes |
+| Stream ended without `finish_reason` | yes |
+| HTTP 400 with `DEGRADED function cannot be invoked` | yes |
+| Any other HTTP 400 | no |
+| Quota exhausted, billing, credit, payment, upgrade or spending limit | no |
 | Authentication, authorization, any other error | no |
+
+When the provider includes usable `Retry-After` guidance (delta-seconds or an
+HTTP date), that value controls the next wait. It is still capped by
+`maxDelayMs`; malformed or unknown guidance falls back to normal backoff.
 
 When a retry happens you see which failure it is waiting on, how long, and how
 many attempts have already failed:
@@ -95,8 +105,9 @@ The safe default is off. Both files are optional, and the project file wins:
 | `baseDelayMs` | `2000` | First wait, in milliseconds. |
 | `maxDelayMs` | `60000` | Ceiling for the growing wait. |
 
-Each attempt multiplies the wait by 1.8 with up to 10% jitter, up to
-`maxDelayMs`. The two delay fields survive `enable` and `disable` cycles.
+Each attempt multiplies the exponential wait by 1.8. Jitter is up to 10% of the
+current exponential delay, and the final wait never exceeds `maxDelayMs`. The
+two delay fields survive `enable` and `disable` cycles.
 
 A missing, unreadable, malformed or unknown-schema file is treated as `off`.
 Typos fail loudly instead of silently changing your retry behaviour.
@@ -104,9 +115,9 @@ Typos fail loudly instead of silently changing your retry behaviour.
 ## How it works
 
 The extension hooks the moment Pi has exhausted its own retries and is about to
-settle the run. If the last assistant message carries a transient provider error,
-it waits with exponential backoff, then asks Pi for one more provider request
-with the same conversation.
+settle the run. Only an error outcome can be retried. If the last assistant
+message carries a transient provider error, it waits with exponential backoff,
+then asks Pi for one more provider request with the same conversation.
 
 The failed assistant message, and any tool results it produced, are omitted from
 the model context first — the same recovery Pi performs on its own retries — so
@@ -114,7 +125,7 @@ the model never sees a half-written turn. No new user prompt is created and your
 conversation is untouched.
 
 The attempt counter resets on a completed turn, an abort, a non-transient
-failure, or a session change.
+failure, a policy switch, or a session change.
 
 ## Troubleshooting
 
