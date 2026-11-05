@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { atomicWriteFileSync } from "./atomic-write.js";
 import type { RetryPolicyValue } from "./retry-policy.js";
 
 export const ONBOARDING_SCHEMA = "gentle-pi.retry-onboarding/v1";
@@ -56,10 +56,7 @@ export function writeOnboardingMarker(configHome: string): void {
 	if (readOnboardingMarker(configHome) === "present") return;
 	mkdirSync(configHome, { recursive: true, mode: 0o700 });
 	const content = JSON.stringify({ schema: ONBOARDING_SCHEMA }, null, "\t");
-	const tmp = mkdtempSync(join(tmpdir(), "gentle-retry-onboarding-"));
-	const tmpPath = join(tmp, ONBOARDING_MARKER_FILE);
-	writeFileSync(tmpPath, content, { mode: 0o600 });
-	renameSync(tmpPath, targetPath);
+	atomicWriteFileSync(targetPath, content, { mode: 0o600 });
 }
 
 /**

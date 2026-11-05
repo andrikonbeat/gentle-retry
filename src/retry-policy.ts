@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, mkdtempSync, renameSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { atomicWriteFileSync } from "./atomic-write.js";
 
 export const RETRY_POLICY_SCHEMA = "gentle-pi.retry/v1";
 export const RETRY_POLICY_FILE = "retry-policy.json";
@@ -62,8 +62,11 @@ function parseRetryPolicyFile(content: string): RetryPolicyFile | null {
 	if (Object.keys(rest).length > 0) return null;
 	const bd = baseDelayMs as number | undefined;
 	const md = maxDelayMs as number | undefined;
-	if (bd !== undefined && (!Number.isInteger(bd) || bd < 0)) return null;
-	if (md !== undefined && (!Number.isInteger(md) || md < 0)) return null;
+	const effectiveBaseDelayMs = bd ?? RETRY_POLICY_DEFAULT_BASE_DELAY_MS;
+	const effectiveMaxDelayMs = md ?? RETRY_POLICY_DEFAULT_MAX_DELAY_MS;
+	if (!Number.isInteger(effectiveBaseDelayMs) || effectiveBaseDelayMs <= 0) return null;
+	if (!Number.isInteger(effectiveMaxDelayMs) || effectiveMaxDelayMs <= 0) return null;
+	if (effectiveMaxDelayMs < effectiveBaseDelayMs) return null;
 	return { schema, policy: policy as RetryPolicyValue, baseDelayMs: bd, maxDelayMs: md };
 }
 
@@ -73,8 +76,9 @@ function readPolicyFile(path: string): ReadResult {
 		const parsed = parseRetryPolicyFile(content);
 		if (!parsed) return { malformed: true };
 		return parsed;
-	} catch {
-		return null;
+	} catch (error) {
+		const code = (error as { code?: unknown }).code;
+		return code === "ENOENT" ? null : { malformed: true };
 	}
 }
 
@@ -127,7 +131,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 
 export function writeRetryPolicy(policy: RetryPolicyValue, cwd: string, options?: { baseDelayMs?: number; maxDelayMs?: number; global?: boolean }): void {
 	const targetPath = options?.global ? globalRetryPolicyPath() : projectRetryPolicyPath(cwd);
-	const dir = join(targetPath, "..");
+	const dir = dirname(targetPath);
 	if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const current = readPolicyFile(targetPath);
 	let baseDelayMs = RETRY_POLICY_DEFAULT_BASE_DELAY_MS;
@@ -139,8 +143,5 @@ export function writeRetryPolicy(policy: RetryPolicyValue, cwd: string, options?
 	if (options?.baseDelayMs !== undefined) baseDelayMs = options.baseDelayMs;
 	if (options?.maxDelayMs !== undefined) maxDelayMs = options.maxDelayMs;
 	const content = JSON.stringify({ schema: RETRY_POLICY_SCHEMA, policy, baseDelayMs, maxDelayMs }, null, "\t");
-	const tmp = mkdtempSync(join(tmpdir(), "gentle-retry-"));
-	const tmpPath = join(tmp, RETRY_POLICY_FILE);
-	writeFileSync(tmpPath, content, { mode: 0o600 });
-	renameSync(tmpPath, targetPath);
+	atomicWriteFileSync(targetPath, content, { mode: 0o600 });
 }

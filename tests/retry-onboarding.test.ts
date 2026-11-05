@@ -1,20 +1,48 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import test, { afterEach } from "node:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import {
+import { registerHooks } from "node:module";
+
+// Run the focused tests against TypeScript sources without writing build output
+// outside the task's allowed edit surfaces. The published build still uses the
+// conventional .js specifiers.
+registerHooks({
+	resolve(specifier, context, nextResolve) {
+		if (specifier.startsWith("./") && specifier.endsWith(".js") && context.parentURL?.includes("/src/")) {
+			return nextResolve(`${specifier.slice(0, -3)}.ts`, context);
+		}
+		return nextResolve(specifier, context);
+	},
+});
+
+const {
 	ONBOARDING_MARKER_FILE,
 	ONBOARDING_MESSAGE,
 	onboardingMarkerPath,
 	readOnboardingMarker,
 	shouldAnnounceOnboarding,
 	writeOnboardingMarker,
-} from "../dist/retry-onboarding.js";
+} = await import("../src/retry-onboarding.ts");
 
-function scratch() {
-	const dir = mkdtempSync(join(tmpdir(), "gentle-retry-onboarding-"));
-	return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+const scratchDirectories: string[] = [];
+const originalTmpDir = process.env.TMPDIR;
+
+afterEach(() => {
+	if (originalTmpDir === undefined) delete process.env.TMPDIR;
+	else process.env.TMPDIR = originalTmpDir;
+	for (const directory of scratchDirectories.splice(0).reverse()) {
+		try {
+			rmSync(directory, { recursive: true, force: true });
+		} catch {}
+	}
+});
+
+function scratch(prefix: string, root = tmpdir()): string {
+	const directory = mkdtempSync(join(root, prefix));
+	scratchDirectories.push(directory);
+	return directory;
 }
 
 test("announces only when the policy is off, there is a UI, and nothing was announced before", () => {
@@ -39,53 +67,52 @@ test("the marker lives in the resolved config home", () => {
 });
 
 test("a missing marker reads as none and writing it reads back as present", () => {
-	const s = scratch();
-	try {
-		assert.equal(readOnboardingMarker(s.dir), "none");
-		assert.equal(existsSync(onboardingMarkerPath(s.dir)), false);
+	const configHome = scratch("gentle-retry-onboarding-");
+	assert.equal(readOnboardingMarker(configHome), "none");
+	assert.equal(existsSync(onboardingMarkerPath(configHome)), false);
 
-		writeOnboardingMarker(s.dir);
-		assert.equal(existsSync(onboardingMarkerPath(s.dir)), true);
-		assert.equal(readOnboardingMarker(s.dir), "present");
-	} finally {
-		s.cleanup();
-	}
+	writeOnboardingMarker(configHome);
+	assert.equal(existsSync(onboardingMarkerPath(configHome)), true);
+	assert.equal(readOnboardingMarker(configHome), "present");
 });
 
 test("writing the marker twice is idempotent and leaves valid json", () => {
-	const s = scratch();
-	try {
-		writeOnboardingMarker(s.dir);
-		const first = readFileSync(onboardingMarkerPath(s.dir), "utf8");
-		writeOnboardingMarker(s.dir);
-		assert.equal(readFileSync(onboardingMarkerPath(s.dir), "utf8"), first);
-		assert.equal(readOnboardingMarker(s.dir), "present");
-		assert.doesNotThrow(() => JSON.parse(first));
-	} finally {
-		s.cleanup();
-	}
+	const configHome = scratch("gentle-retry-onboarding-");
+	writeOnboardingMarker(configHome);
+	const first = readFileSync(onboardingMarkerPath(configHome), "utf8");
+	writeOnboardingMarker(configHome);
+	assert.equal(readFileSync(onboardingMarkerPath(configHome), "utf8"), first);
+	assert.equal(readOnboardingMarker(configHome), "present");
+	assert.doesNotThrow(() => JSON.parse(first));
 });
 
 test("a corrupt marker reads as unreadable rather than as none", () => {
-	const s = scratch();
-	try {
-		writeFileSync(onboardingMarkerPath(s.dir), "{not json", "utf8");
-		assert.equal(readOnboardingMarker(s.dir), "unreadable");
+	const configHome = scratch("gentle-retry-onboarding-");
+	writeFileSync(onboardingMarkerPath(configHome), "{not json", "utf8");
+	assert.equal(readOnboardingMarker(configHome), "unreadable");
 
-		writeFileSync(onboardingMarkerPath(s.dir), JSON.stringify({ schema: "something-else/v9" }), "utf8");
-		assert.equal(readOnboardingMarker(s.dir), "unreadable");
-	} finally {
-		s.cleanup();
-	}
+	writeFileSync(onboardingMarkerPath(configHome), JSON.stringify({ schema: "something-else/v9" }), "utf8");
+	assert.equal(readOnboardingMarker(configHome), "unreadable");
 });
 
 test("a malformed marker does not stop the marker from being rewritten", () => {
-	const s = scratch();
-	try {
-		writeFileSync(onboardingMarkerPath(s.dir), "{not json", "utf8");
-		writeOnboardingMarker(s.dir);
-		assert.equal(readOnboardingMarker(s.dir), "present");
-	} finally {
-		s.cleanup();
-	}
+	const configHome = scratch("gentle-retry-onboarding-");
+	writeFileSync(onboardingMarkerPath(configHome), "{not json", "utf8");
+	writeOnboardingMarker(configHome);
+	assert.equal(readOnboardingMarker(configHome), "present");
+});
+
+test("the onboarding marker write works across filesystems from the OS temporary directory", () => {
+	const configHome = scratch("gentle-retry-onboarding-home-", homedir());
+	const operatingSystemTemp = scratch("gentle-retry-onboarding-os-temp-", tmpdir());
+	assert.notEqual(
+		statSync(configHome).dev,
+		statSync(operatingSystemTemp).dev,
+		"the regression requires config and OS temporary paths on different filesystems",
+	);
+	process.env.TMPDIR = operatingSystemTemp;
+
+	writeOnboardingMarker(configHome);
+
+	assert.equal(readOnboardingMarker(configHome), "present");
 });
