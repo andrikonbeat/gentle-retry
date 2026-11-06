@@ -1,7 +1,7 @@
 {
   "name": "gentle-retry",
   "version": "0.1.0",
-  "description": "Unlimited retry on HTTP 429 and timeout for Gentle Shell and Pi Coding Agent",
+  "description": "Reliable retry for transient provider failures in Gentle Shell and Pi Coding Agent",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,7 +16,8 @@
     "pretest": "pnpm run build",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "prepack": "pnpm run build",
-    "prepublishOnly": "pnpm run check && pnpm test"
+    "prepublishOnly": "pnpm run check && pnpm test",
+    "verify:package": "node scripts/verify-package.mjs"
   },
   "keywords": [
     "gentle-shell",
@@ -40,14 +41,14 @@
     "url": "https://github.com/andrikonbeat/gentle-retry/issues"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": "^22.19.0 || ^24.0.0"
   },
   "packageManager": "pnpm@11.26.0",
   "publishConfig": {
     "access": "public"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "^1.4.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^1.4.0",

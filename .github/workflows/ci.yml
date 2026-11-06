@@ -11,12 +11,12 @@ permissions:
 
 jobs:
   test:
-    name: check and test (node ${{ matrix.node }})
+    name: check, test, and verify package (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # The extension declares node >=22.19.0 because the host requires it.
+        # These are the Node lines declared by package.json and verified here.
         node: [22, 24]
     steps:
       - name: Checkout
@@ -40,5 +40,8 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Verify the published tarball contents
-        run: npm pack --dry-run
+      - name: Build the package
+        run: pnpm run build
+
+      - name: Verify the packed artifact
+        run: node scripts/verify-package.mjs

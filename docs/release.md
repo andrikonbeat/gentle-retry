@@ -11,11 +11,12 @@ The gate is green evidence, not confidence:
 pnpm install --frozen-lockfile
 pnpm run check
 pnpm test
-npm pack --dry-run
+pnpm run build
+node scripts/verify-package.mjs
 ```
 
-CI runs the same commands on node 22 and 24. A release does not start while any
-of them is red.
+CI runs the source checks, tests, build, and packed-artifact verification on
+Node 22 and Node 24. A release does not start while any of them is red.
 
 ## Version
 
@@ -28,28 +29,38 @@ of them is red.
    `## [x.y.z] - YYYY-MM-DD` heading, and update the two link definitions at the
    bottom.
 
+## Supported runtime and host
+
+The package engine range is `^22.19.0 || ^24.0.0`. It keeps Pi's Node
+`>=22.19.0` host minimum and supports the same Node 22 and Node 24 lines that
+CI verifies. Other Node lines, including Node 26, are intentionally excluded
+until the type check, test suite, and packed-artifact verification pass
+reliably on them.
+
+The extension peer dependency is `@earendil-works/pi-coding-agent: ^1.4.0`.
+This accepts the installed and verified Pi 1.4.0 release, allows compatible 1.x
+updates, and excludes unverified future majors.
+
 ## Verify the artifact, not the source tree
 
 A published package that installs but does nothing is the failure mode this
-section exists to catch. Pack, unpack, and load the artifact the registry would
-serve:
+section exists to catch. The release verifier creates the real npm tarball,
+extracts it, and checks the bytes that the registry would serve:
 
 ```bash
-npm pack                                  # gentle-retry-<version>.tgz
-tar -tzf gentle-retry-<version>.tgz | grep -E 'package/(dist/extension\.js|package\.json)'
-mkdir -p /tmp/gr-check && tar -xzf gentle-retry-<version>.tgz -C /tmp/gr-check
-node -e "import('/tmp/gr-check/package/dist/extension.js').then(m => console.log('default export:', typeof m.default))"
+pnpm run build
+node scripts/verify-package.mjs
 ```
 
-The last command must print `default export: function`. The `pi` entry in
-`package.json` points at `./dist/extension.js`, so a missing `dist/` means the
-package installs and stays inert. `prepack` builds it; a tarball packed with
-`--ignore-scripts` will not have it.
-
-Finally, load it the way a user would, from the extracted directory:
+The verifier packs the project without running lifecycle scripts, extracts the
+result, and checks that the packed `package.json` contains the `pi.extensions`
+entry for `./dist/extension.js`. It imports that file from the extracted
+tarball, requires its default export to be a function, and confirms that the
+packed public instructions contain the exact install command. Run the build
+first so the verifier inspects the current source revision:
 
 ```bash
-pi -e /tmp/gr-check/package
+pi install npm:gentle-retry
 ```
 
 ## Publish
@@ -68,6 +79,8 @@ Rules:
   without updating every install instruction that names it.
 - `npm publish` refuses to run if `pnpm run check` or `pnpm test` fails, because
   `prepublishOnly` runs them.
+- Publishing is a separate human-authorized action. CI has no publish step and
+  must not receive npm registry credentials.
 - Do not publish from a dirty working tree. Commit and tag first, so the
   published bytes have a recorded origin.
 
