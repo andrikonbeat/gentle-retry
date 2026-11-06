@@ -6,7 +6,7 @@ import type {
 	ExtensionContext,
 	ProjectedSessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { gentlePiConfigHome, resolveRetryPolicy, writeRetryPolicy } from "./retry-policy.js";
+import { gentlePiConfigHome, resolveRetryPolicy, retryPolicyPaths, writeRetryPolicy } from "./retry-policy.js";
 import { classifyTransientFailure, parseRetryAfterMs, TRANSIENT_FAILURE_LABEL } from "./retry-classification.js";
 import {
 	ONBOARDING_MESSAGE,
@@ -16,7 +16,7 @@ import {
 } from "./retry-onboarding.js";
 import { guardExtensionEvents } from "./stale-context.js";
 
-const RETRY_STATUS_TEXT = "Unlimited retry on 429/timeout";
+const RETRY_STATUS_TEXT = "Transient provider retry";
 const OFF_TEXT = "OFF";
 const ON_TEXT = "ON";
 
@@ -26,13 +26,36 @@ interface FailedAttempt {
 }
 
 const attemptBySession = new Map<string, number>();
+const firstFailureAtBySession = new Map<string, number>();
+const pausedSessions = new Set<string>();
 
 function sessionKey(ctx: ExtensionContext): string {
 	return ctx.sessionManager?.getSessionId?.() ?? "default";
 }
 
 function resetAttempts(ctx: ExtensionContext): void {
-	attemptBySession.delete(sessionKey(ctx));
+	const key = sessionKey(ctx);
+	attemptBySession.delete(key);
+	firstFailureAtBySession.delete(key);
+}
+
+function isPaused(ctx: ExtensionContext): boolean {
+	return pausedSessions.has(sessionKey(ctx));
+}
+
+function formatLimit(value: number | undefined, suffix: string): string {
+	return value === undefined ? "unlimited" : `${value}${suffix}`;
+}
+
+function policyStatus(policy: ReturnType<typeof resolveRetryPolicy>, paused: boolean): string {
+	return [
+		`${RETRY_STATUS_TEXT} ${policy.policy === "on" ? ON_TEXT : OFF_TEXT}`,
+		`source: ${policy.source}${policy.malformed ? `, malformed ${policy.malformedSource ?? "file"}` : ""}`,
+		`delays: ${policy.baseDelayMs}ms-${policy.maxDelayMs}ms`,
+		`max attempts: ${formatLimit(policy.maxAttempts, "")}`,
+		`max elapsed: ${formatLimit(policy.maxElapsedMs, "ms")}`,
+		`paused: ${paused ? "yes" : "no"}`,
+	].join(" | ");
 }
 
 function nextAttempt(ctx: ExtensionContext): number {
@@ -138,26 +161,60 @@ function omissionDrafts(
 
 function createRetryCommand() {
 	return async function retryCommand(args: string, ctx: ExtensionContext): Promise<void> {
-		const policy = resolveRetryPolicy(ctx.cwd);
 		const trimmed = args.trim().toLowerCase();
-		const status = `${RETRY_STATUS_TEXT} ${policy.policy === "on" ? ON_TEXT : OFF_TEXT} (source: ${policy.source}${policy.malformed ? ", malformed" : ""})`;
+		const policy = resolveRetryPolicy(ctx.cwd);
+		const paused = isPaused(ctx);
 		if (!trimmed || trimmed === "status") {
-			ctx.ui.notify(status);
+			ctx.ui.notify(policyStatus(policy, paused));
 			return;
 		}
-		if (trimmed === "enable") {
-			writeRetryPolicy("on", ctx.cwd);
+		if (trimmed === "enable" || trimmed === "enable --global") {
+			const global = trimmed.endsWith(" --global");
+			writeRetryPolicy("on", ctx.cwd, { global });
 			resetAttempts(ctx);
-			ctx.ui.notify(`${RETRY_STATUS_TEXT} enabled`);
+			ctx.ui.notify(`${RETRY_STATUS_TEXT} enabled (${global ? "global" : "project"})`);
 			return;
 		}
-		if (trimmed === "disable") {
-			writeRetryPolicy("off", ctx.cwd);
+		if (trimmed === "disable" || trimmed === "disable --global") {
+			const global = trimmed.endsWith(" --global");
+			writeRetryPolicy("off", ctx.cwd, { global });
 			resetAttempts(ctx);
-			ctx.ui.notify(`${RETRY_STATUS_TEXT} disabled`);
+			ctx.ui.notify(`${RETRY_STATUS_TEXT} disabled (${global ? "global" : "project"})`);
 			return;
 		}
-		ctx.ui.notify("Use /gentle:retry enable|disable|status. State unchanged.");
+		if (trimmed === "pause") {
+			pausedSessions.add(sessionKey(ctx));
+			resetAttempts(ctx);
+			ctx.ui.notify(`${RETRY_STATUS_TEXT} paused for this session`);
+			return;
+		}
+		if (trimmed === "resume") {
+			pausedSessions.delete(sessionKey(ctx));
+			resetAttempts(ctx);
+			ctx.ui.notify(`${RETRY_STATUS_TEXT} resumed for this session`);
+			return;
+		}
+		if (trimmed === "doctor") {
+			const configHome = gentlePiConfigHome();
+			const paths = retryPolicyPaths(ctx.cwd);
+			const diagnostics = [
+				`policy: ${policy.policy === "on" ? ON_TEXT : OFF_TEXT}`,
+				`source: ${policy.source}${policy.malformed ? `, malformed ${policy.malformedSource ?? "file"}` : ""}`,
+				`delays: ${policy.baseDelayMs}ms-${policy.maxDelayMs}ms`,
+				`max attempts: ${formatLimit(policy.maxAttempts, "")}`,
+				`max elapsed: ${formatLimit(policy.maxElapsedMs, "ms")}`,
+				`paused: ${paused ? "yes" : "no"}`,
+				`project policy: ${paths.project}`,
+				`global policy: ${paths.global}`,
+				`config home: ${configHome}`,
+				`install: pi install npm:gentle-retry`,
+			];
+			ctx.ui.notify(`gentle-retry doctor — ${diagnostics.join(" | ")}`, "info");
+			return;
+		}
+		ctx.ui.notify(
+			"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|doctor. State unchanged.",
+		);
 	};
 }
 
@@ -203,6 +260,10 @@ async function agentBeforeSettleHandler(
 		resetAttempts(ctx);
 		return;
 	}
+	if (isPaused(ctx)) {
+		resetAttempts(ctx);
+		return;
+	}
 	const failed = findFailedAttempt(event.context.contextEntries);
 	if (!failed) {
 		resetAttempts(ctx);
@@ -213,7 +274,25 @@ async function agentBeforeSettleHandler(
 		resetAttempts(ctx);
 		return;
 	}
+	const key = sessionKey(ctx);
+	const firstFailureAt = firstFailureAtBySession.get(key) ?? Date.now();
+	firstFailureAtBySession.set(key, firstFailureAt);
 	const attempt = nextAttempt(ctx);
+	if (policy.maxAttempts !== undefined && attempt > policy.maxAttempts) {
+		ctx.ui.notify(
+			`Retry stopped: maximum attempts reached (${policy.maxAttempts}). Use /gentle:retry resume to start a new sequence.`,
+			"warning",
+		);
+		return;
+	}
+	const elapsedMs = Date.now() - firstFailureAt;
+	if (policy.maxElapsedMs !== undefined && elapsedMs >= policy.maxElapsedMs) {
+		ctx.ui.notify(
+			`Retry stopped: maximum elapsed time reached (${policy.maxElapsedMs}ms). Use /gentle:retry resume to start a new sequence.`,
+			"warning",
+		);
+		return;
+	}
 	const retryAfterMs = parseRetryAfterMs(failed.errorMessage);
 	const delayMs = retryAfterMs === undefined
 		? retryDelayMs(attempt, policy.baseDelayMs, policy.maxDelayMs)
@@ -251,7 +330,7 @@ export function createGentleRetryExtension(): (pi: ExtensionAPI) => void {
 		// extension errors.
 		const guarded = guardExtensionEvents(pi);
 		guarded.registerCommand("gentle:retry", {
-			description: "Unlimited retry on HTTP 429 and timeout",
+			description: "Control and diagnose transient provider retry",
 			handler: createRetryCommand(),
 		});
 		guarded.on("session_start", (_event, ctx) => announceOnboarding(ctx));
@@ -269,6 +348,8 @@ export default function gentleRetryExtension(pi: ExtensionAPI): void {
 
 export function resetExtensionState(): void {
 	attemptBySession.clear();
+	firstFailureAtBySession.clear();
+	pausedSessions.clear();
 }
 
 export type { RetryPolicyValue, ResolvedRetryPolicy } from "./retry-policy.js";

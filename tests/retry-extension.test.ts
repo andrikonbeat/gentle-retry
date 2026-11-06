@@ -178,9 +178,110 @@ test("invalid subcommand shows usage and leaves state unchanged", async () => {
 	const h = harness();
 	await h.commands.get("gentle:retry")!.handler("enable", h.ctx);
 	await h.commands.get("gentle:retry")!.handler("invalid", h.ctx);
-	assert.equal(h.notices.at(-1), "Use /gentle:retry enable|disable|status. State unchanged.");
+	assert.equal(
+		h.notices.at(-1),
+		"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|doctor. State unchanged.",
+	);
 	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
 	assert.match(h.notices.at(-1)!, /ON/);
+	h.cleanup();
+});
+
+test("global enable and disable write the global policy without changing the project", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("enable --global", h.ctx);
+	assert.match(h.notices.at(-1)!, /enabled \(global\)/);
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /ON.*source: global_file/);
+
+	await h.commands.get("gentle:retry")!.handler("disable --global", h.ctx);
+	assert.match(h.notices.at(-1)!, /disabled \(global\)/);
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /OFF.*source: global_file/);
+	h.cleanup();
+});
+
+test("status reports effective source, delay bounds, optional limits, and pause state", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, {
+		baseDelayMs: 1500,
+		maxDelayMs: 45000,
+		maxAttempts: 9,
+		maxElapsedMs: 120000,
+	});
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /ON/);
+	assert.match(h.notices.at(-1)!, /source: project_file/);
+	assert.match(h.notices.at(-1)!, /delays: 1500ms-45000ms/);
+	assert.match(h.notices.at(-1)!, /max attempts: 9/);
+	assert.match(h.notices.at(-1)!, /max elapsed: 120000ms/);
+	assert.match(h.notices.at(-1)!, /paused: no/);
+	h.cleanup();
+});
+
+test("pause is session-scoped, blocks retries, and resume restores them", async () => {
+	const h = harness();
+	await enableFast(h);
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	]);
+
+	await h.commands.get("gentle:retry")!.handler("pause", h.ctx);
+	assert.match(h.notices.at(-1)!, /paused for this session/);
+	assert.equal(await settle(h, event), undefined);
+
+	await h.commands.get("gentle:retry")!.handler("resume", h.ctx);
+	assert.match(h.notices.at(-1)!, /resumed for this session/);
+	assert.equal(((await settle(h, event)) as { continue: boolean }).continue, true);
+
+	await h.commands.get("gentle:retry")!.handler("pause", h.ctx);
+	h.sessionId = "another-session";
+	assert.equal(((await settle(h, event)) as { continue: boolean }).continue, true);
+	h.cleanup();
+});
+
+test("doctor reports actionable configuration and install diagnostics", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, { maxAttempts: 4 });
+	await h.commands.get("gentle:retry")!.handler("doctor", h.ctx);
+	const diagnostic = h.notices.at(-1)!;
+	assert.match(diagnostic, /gentle-retry doctor/);
+	assert.match(diagnostic, /policy: ON/);
+	assert.match(diagnostic, /source: project_file/);
+	assert.match(diagnostic, /max attempts: 4/);
+	assert.match(diagnostic, /project policy: .*retry-policy\.json/);
+	assert.match(diagnostic, /global policy: .*retry-policy\.json/);
+	assert.match(diagnostic, /config home:/);
+	assert.match(diagnostic, /install: pi install npm:gentle-retry/);
+	assert.doesNotMatch(diagnostic, /api[_-]?key|token|password|credential/i);
+	h.cleanup();
+});
+
+test("optional max attempts stops the sequence and reports the limit", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, { baseDelayMs: 1, maxDelayMs: 2, maxAttempts: 1 });
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	]);
+	assert.equal(((await settle(h, event)) as { continue: boolean }).continue, true);
+	assert.equal(await settle(h, event), undefined);
+	assert.match(h.notices.at(-1)!, /maximum attempts reached \(1\)/);
+	h.cleanup();
+});
+
+test("optional max elapsed time stops the sequence and reports the limit", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, { baseDelayMs: 1, maxDelayMs: 2, maxElapsedMs: 1 });
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	]);
+	assert.equal(((await settle(h, event)) as { continue: boolean }).continue, true);
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	assert.equal(await settle(h, event), undefined);
+	assert.match(h.notices.at(-1)!, /maximum elapsed time reached \(1ms\)/);
 	h.cleanup();
 });
 

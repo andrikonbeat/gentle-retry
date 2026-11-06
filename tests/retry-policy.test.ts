@@ -154,22 +154,56 @@ test("an unknown-schema project retry file fails closed even when the global one
 	assert.ok(policy.malformed);
 });
 
-test("delay knobs are optional, defaulted, and survive a policy switch", () => {
+test("delay and limit knobs are optional, defaulted, and survive a policy switch", () => {
 	const configHome = scratch("gentle-retry-config-");
 	const projectDir = scratch("gentle-retry-project-");
 	process.env.GENTLE_PI_CONFIG_HOME = configHome;
 
-	writeRetryPolicy("on", projectDir, { baseDelayMs: 3000, maxDelayMs: 90000 });
+	writeRetryPolicy("on", projectDir, {
+		baseDelayMs: 3000,
+		maxDelayMs: 90000,
+		maxAttempts: 12,
+		maxElapsedMs: 600000,
+	});
 	let policy = resolveRetryPolicy(projectDir);
 	assert.equal(policy.baseDelayMs, 3000);
 	assert.equal(policy.maxDelayMs, 90000);
+	assert.equal(policy.maxAttempts, 12);
+	assert.equal(policy.maxElapsedMs, 600000);
 
 	writeRetryPolicy("off", projectDir);
 	policy = resolveRetryPolicy(projectDir);
 	assert.equal(policy.policy, "off");
 	assert.equal(policy.baseDelayMs, 3000);
 	assert.equal(policy.maxDelayMs, 90000);
+	assert.equal(policy.maxAttempts, 12);
+	assert.equal(policy.maxElapsedMs, 600000);
 });
+
+for (const [name, limits] of [
+	["a zero maximum attempt count", { maxAttempts: 0 }],
+	["a fractional maximum attempt count", { maxAttempts: 1.5 }],
+	["a zero maximum elapsed time", { maxElapsedMs: 0 }],
+	["a fractional maximum elapsed time", { maxElapsedMs: 1.5 }],
+] as const) {
+	test(`${name} makes the project policy malformed and fails closed`, () => {
+		const configHome = scratch("gentle-retry-config-");
+		const projectDir = scratch("gentle-retry-project-");
+		process.env.GENTLE_PI_CONFIG_HOME = configHome;
+		writePolicyFile(join(projectDir, ".pi", "gentle-ai", RETRY_POLICY_FILE), {
+			schema: RETRY_POLICY_SCHEMA,
+			policy: "on",
+			...limits,
+		});
+
+		const policy = resolveRetryPolicy(projectDir);
+
+		assert.equal(policy.policy, "off");
+		assert.equal(policy.source, "default");
+		assert.ok(policy.malformed);
+		assert.equal(policy.malformedSource, "project_file");
+	});
+}
 
 for (const [name, delays] of [
 	["a zero base delay", { baseDelayMs: 0, maxDelayMs: 1000 }],
@@ -211,6 +245,19 @@ test("positive integer delays with max greater than or equal to base are accepte
 	assert.equal(policy.policy, "on");
 	assert.equal(policy.baseDelayMs, 1000);
 	assert.equal(policy.maxDelayMs, 1000);
+});
+
+test("global policy writes are resolved from the global source", () => {
+	const configHome = scratch("gentle-retry-config-");
+	const projectDir = scratch("gentle-retry-project-");
+	process.env.GENTLE_PI_CONFIG_HOME = configHome;
+
+	writeRetryPolicy("on", projectDir, { global: true, maxAttempts: 7 });
+
+	const policy = resolveRetryPolicy(projectDir);
+	assert.equal(policy.policy, "on");
+	assert.equal(policy.source, "global_file");
+	assert.equal(policy.maxAttempts, 7);
 });
 
 test("project and global policy writes work across filesystems from the OS temporary directory", () => {

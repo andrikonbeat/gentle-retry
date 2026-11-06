@@ -13,7 +13,7 @@ export const ONBOARDING_MARKER_FILE = "retry-onboarding.json";
  * names the command that turns it on.
  */
 export const ONBOARDING_MESSAGE =
-	"gentle-retry installed — OFF. Tailored for HTTP 429 and timeouts: /gentle:retry enable keeps a run alive instead of stopping.";
+	"gentle-retry installed — OFF. Retries transient provider failures such as HTTP 429 and timeouts: /gentle:retry enable keeps a run alive instead of stopping.";
 
 export type OnboardingMarkerState = "none" | "present" | "unreadable";
 

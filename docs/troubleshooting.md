@@ -1,5 +1,18 @@
 # Troubleshooting
 
+## Commands and diagnostics
+
+Run `/gentle:retry status` to see the effective policy, whether it came from
+the project or global file, the delay bounds, optional retry limits, and
+whether this session is paused.
+
+Use `/gentle:retry pause` and `/gentle:retry resume` for temporary,
+session-scoped control. They do not change the saved project or global policy.
+
+Use `/gentle:retry doctor` when the extension is installed but does not behave
+as expected. It reports configuration and installation diagnostics without
+reading or printing credentials.
+
 ## The extension is installed but nothing happens
 
 That is the default. gentle-retry ships **off**, because an unlimited retry loop
@@ -80,6 +93,10 @@ values fall back to the exponential backoff above.
 ```json
 { "schema": "gentle-pi.retry/v1", "policy": "on", "baseDelayMs": 1000, "maxDelayMs": 30000 }
 ```
+
+Optional `maxAttempts` and `maxElapsedMs` fields cap a retry sequence. They are
+unlimited when omitted. When a cap is reached, gentle-retry reports the limit
+and stops retrying; use `/gentle:retry resume` to begin a fresh sequence.
 
 Changing these does not require re-enabling; `/gentle:retry enable` preserves
 them across on/off cycles.
