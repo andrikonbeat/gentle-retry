@@ -57,6 +57,7 @@ See [Controls](#controls) for the complete command surface. In short:
 /gentle:retry enable     # keep runs alive through transient provider failures
 /gentle:retry disable    # back to Pi's own retry budget
 /gentle:retry status     # effective state, source, limits, and pause state
+/gentle:retry auto-resume on   # continue an interrupted turn when a session is reopened
 ```
 
 ## What it retries
@@ -107,6 +108,7 @@ The safe default is off. Both files are optional, and the project file wins:
 | `policy` | `"off"` | `"on"` or `"off"`. Anything else fails closed. |
 | `baseDelayMs` | `2000` | First wait, in milliseconds. |
 | `maxDelayMs` | `60000` | Ceiling for the growing wait. |
+| `autoResume` | `false` | Continue an interrupted turn when the session is reopened. |
 
 Each attempt multiplies the exponential wait by 1.8. Jitter is up to 10% of the
 current exponential delay, and the final wait never exceeds `maxDelayMs`. The
@@ -125,6 +127,7 @@ The command surface is intentionally small:
 /gentle:retry status
 /gentle:retry pause
 /gentle:retry resume
+/gentle:retry auto-resume on|off [--global]
 /gentle:retry doctor
 ```
 
@@ -134,9 +137,18 @@ policy still takes precedence over the global one.
 
 `pause` and `resume` affect only the current session. Pausing prevents retries
 without changing the saved policy. `status` shows the effective policy, its
-source, delay bounds, optional safety limits, and pause state. `doctor` adds
-configuration and installation diagnostics; it never reads or prints
-credentials.
+source, delay bounds, optional safety limits, pause state, and the auto-resume
+switch. `doctor` adds configuration and installation diagnostics; it never
+reads or prints credentials.
+
+`auto-resume` is a separate, opt-in switch. When it is on and you reopen a
+session whose last turn was interrupted — the terminal closed, the process was
+killed — gentle-retry sends one continuation message so the run picks up where
+it stopped. It never continues a turn that ended normally, that you aborted, or
+that failed with a provider error, and it never continues the same turn twice.
+Because a turn can die after a tool already ran, the continuation is
+at-least-once: a side effect may repeat. That is why the switch is off by
+default.
 
 Optional safety limits are off by default. Add positive integers to the policy
 file to cap a retry sequence:

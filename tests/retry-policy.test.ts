@@ -20,6 +20,7 @@ registerHooks({
 const {
 	resolveRetryPolicy,
 	writeRetryPolicy,
+	readRetryPolicyValue,
 	RETRY_POLICY_SCHEMA,
 	RETRY_POLICY_FILE,
 } = await import("../src/retry-policy.ts");
@@ -284,4 +285,59 @@ test("project and global policy writes work across filesystems from the OS tempo
 	const globalPolicy = resolveRetryPolicy(globalProjectDir);
 	assert.equal(globalPolicy.policy, "on");
 	assert.equal(globalPolicy.source, "global_file");
+});
+
+test("auto resume stays disabled when the policy file omits it", () => {
+	const configHome = scratch("gentle-retry-config-");
+	const projectDir = scratch("gentle-retry-project-");
+	process.env.GENTLE_PI_CONFIG_HOME = configHome;
+
+	writePolicyFile(join(projectDir, ".pi", "gentle-ai", RETRY_POLICY_FILE), {
+		schema: RETRY_POLICY_SCHEMA,
+		policy: "on",
+	});
+
+	const policy = resolveRetryPolicy(projectDir);
+	assert.equal(policy.policy, "on");
+	assert.equal(policy.autoResume, false);
+});
+
+test("the auto resume flag round-trips through the policy file", () => {
+	const configHome = scratch("gentle-retry-config-");
+	const projectDir = scratch("gentle-retry-project-");
+	process.env.GENTLE_PI_CONFIG_HOME = configHome;
+
+	writeRetryPolicy("on", projectDir, { autoResume: true });
+
+	const policy = resolveRetryPolicy(projectDir);
+	assert.equal(policy.autoResume, true);
+	assert.equal(policy.policy, "on");
+});
+
+test("a non-boolean auto resume value makes the policy malformed", () => {
+	const configHome = scratch("gentle-retry-config-");
+	const projectDir = scratch("gentle-retry-project-");
+	process.env.GENTLE_PI_CONFIG_HOME = configHome;
+
+	writePolicyFile(join(projectDir, ".pi", "gentle-ai", RETRY_POLICY_FILE), {
+		schema: RETRY_POLICY_SCHEMA,
+		policy: "on",
+		autoResume: "yes",
+	});
+
+	const policy = resolveRetryPolicy(projectDir);
+	assert.equal(policy.malformed, true);
+	assert.equal(policy.policy, "off");
+	assert.equal(policy.autoResume, false);
+});
+
+test("readRetryPolicyValue reads one scope without touching the other", () => {
+	const configHome = scratch("gentle-retry-config-");
+	const projectDir = scratch("gentle-retry-project-");
+	process.env.GENTLE_PI_CONFIG_HOME = configHome;
+
+	writeRetryPolicy("on", projectDir, { global: true, autoResume: true });
+
+	assert.equal(readRetryPolicyValue(projectDir), "off");
+	assert.equal(readRetryPolicyValue(projectDir, { global: true }), "on");
 });
