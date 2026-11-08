@@ -714,3 +714,55 @@ test("auto-resume only runs for resumed sessions in an interactive terminal", as
 	assert.equal(h.sent.length, 0);
 	h.cleanup();
 });
+
+type Selector = (title: string, options: string[]) => Promise<string | undefined>;
+
+function withSelector(h: ReturnType<typeof harness>, select: Selector) {
+	const calls: Array<{ title: string; options: string[] }> = [];
+	(h.ctx.ui as unknown as { select: Selector }).select = async (title: string, options: string[]) => {
+		calls.push({ title, options });
+		return select(title, options);
+	};
+	return calls;
+}
+
+test("the command without arguments opens the interactive menu", async () => {
+	const h = harness();
+	const calls = withSelector(h, (_title, options) => options.find((option) => option.startsWith("Auto-resume")));
+	await h.commands.get("gentle:retry")!.handler("", h.ctx);
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0]!.title, "Gentle retry (current: off)");
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /auto resume: ON/);
+	h.cleanup();
+});
+
+test("the menu offers every action of the command surface", async () => {
+	const h = harness();
+	const calls = withSelector(h, () => undefined);
+	await h.commands.get("gentle:retry")!.handler("", h.ctx);
+	const options = calls[0]!.options;
+	for (const expected of [
+		"Enable for this project",
+		"Disable for this project",
+		"Enable for every project",
+		"Disable for every project",
+		"Pause retrying in this session",
+		"Auto-resume: on",
+		"Show status",
+		"Show diagnostics",
+	]) {
+		assert.ok(options.includes(expected), `the menu must offer "${expected}"`);
+	}
+	h.cleanup();
+});
+
+test("cancelling the menu changes nothing", async () => {
+	const h = harness();
+	withSelector(h, () => undefined);
+	await h.commands.get("gentle:retry")!.handler("", h.ctx);
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /Transient provider retry OFF/);
+	assert.match(h.notices.at(-1)!, /auto resume: OFF/);
+	h.cleanup();
+});

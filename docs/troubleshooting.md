@@ -13,6 +13,11 @@ Use `/gentle:retry doctor` when the extension is installed but does not behave
 as expected. It reports configuration and installation diagnostics without
 reading or printing credentials.
 
+Run `/gentle:retry` without arguments to get the interactive menu titled
+`Gentle retry (current: on)`: every action — enable and disable per project or
+globally, pause and resume for this session, the auto-resume switch, the
+status, and the diagnostics — in one place.
+
 Use `/gentle:retry auto-resume on|off [--global]` to control the separate
 auto-resume switch, which continues a turn that was interrupted when the
 session was reopened.

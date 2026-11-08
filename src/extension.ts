@@ -162,8 +162,47 @@ function omissionDrafts(
 	return drafts;
 }
 
+/**
+ * The interactive menu: one entry per action of the command surface.
+ *
+ * The chosen entry is handed back to the command handler, so the menu and
+ * the argument forms run exactly the same code.
+ */
+async function openRetryMenu(
+	ctx: ExtensionContext,
+	run: (args: string, ctx: ExtensionContext) => Promise<void>,
+): Promise<void> {
+	const policy = resolveRetryPolicy(ctx.cwd);
+	const paused = isPaused(ctx);
+	const entries = [
+		{ label: "Enable for this project", action: "enable" },
+		{ label: "Disable for this project", action: "disable" },
+		{ label: "Enable for every project", action: "enable --global" },
+		{ label: "Disable for every project", action: "disable --global" },
+		{
+			label: paused ? "Resume retrying in this session" : "Pause retrying in this session",
+			action: paused ? "resume" : "pause",
+		},
+		{
+			label: policy.autoResume ? "Auto-resume: off" : "Auto-resume: on",
+			action: `auto-resume ${policy.autoResume ? "off" : "on"}`,
+		},
+		{ label: "Show status", action: "status" },
+		{ label: "Show diagnostics", action: "doctor" },
+	];
+	const selected = await ctx.ui.select(`Gentle retry (current: ${policy.policy})`, entries.map((entry) => entry.label));
+	if (selected === undefined) return;
+	const chosen = entries.find((entry) => entry.label === selected);
+	if (!chosen) return;
+	await run(chosen.action, ctx);
+}
+
 function createRetryCommand() {
 	return async function retryCommand(args: string, ctx: ExtensionContext): Promise<void> {
+		if (!args.trim() && ctx.hasUI && typeof ctx.ui.select === "function") {
+			await openRetryMenu(ctx, retryCommand);
+			return;
+		}
 		const trimmed = args.trim().toLowerCase();
 		const policy = resolveRetryPolicy(ctx.cwd);
 		const paused = isPaused(ctx);

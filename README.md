@@ -60,6 +60,9 @@ See [Controls](#controls) for the complete command surface. In short:
 /gentle:retry auto-resume on   # continue an interrupted turn when a session is reopened
 ```
 
+Run `/gentle:retry` without arguments and the whole surface appears in one
+menu — `Gentle retry (current: on)` — so you never have to remember a flag.
+
 ## What it retries
 
 | Cause | Retried |
@@ -130,6 +133,12 @@ The command surface is intentionally small:
 /gentle:retry auto-resume on|off [--global]
 /gentle:retry doctor
 ```
+
+Without arguments, `/gentle:retry` opens an interactive menu titled
+`Gentle retry (current: on)` with every action: enable and disable per project
+or globally, pause and resume for this session, the auto-resume switch, the
+status, and the diagnostics. The argument forms above stay available for
+scripts.
 
 Without `--global`, `enable` and `disable` write the project policy. With
 `--global`, they write the policy in the Gentle AI config home. A valid project
