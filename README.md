@@ -206,9 +206,13 @@ healthy machine:
   attempts.
 - Only a real outage changes the behaviour. The connectivity probe asks "can
   this machine reach the internet right now", and one failed probe is not
-  enough: two consecutive failures are required.
+  enough: two consecutive failures are required, so the check may cost two
+  small requests.
 - While the machine is offline the turn waits (up to five minutes, Esc stops
   it) instead of ending, and that wait consumes no retry attempt.
+- If that wait runs out, the turn ends and the session keeps watching in the
+  background for up to an hour: it resumes by itself when the network comes
+  back, and `/gentle:retry reconnect disable` stops the watch.
 - When the connectivity returns, the same turn continues with the failed
   message left out. If the turn already ended, the work continues in a new run
   with one continuation message.

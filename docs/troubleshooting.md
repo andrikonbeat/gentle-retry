@@ -75,10 +75,17 @@ and resume the work by itself:
 ```
 
 The extension checks the connectivity with one small request before it changes
-anything. While the machine is online, a timeout is still just a timeout and
-the retry sequence handles it exactly as before. While the machine is offline,
-the turn waits (five minutes at most, Esc stops it) and then continues by
-itself, either in the same run or with one continuation message.
+anything, and with a second one when the first fails: one failed probe is never
+enough to declare an outage. While the machine is online, a timeout is still
+just a timeout and the retry sequence handles it exactly as before. While the
+machine is offline, the turn waits (five minutes at most, Esc stops it) and
+then continues by itself, either in the same run or with one continuation
+message.
+
+If the network is still down when that wait runs out, the session keeps
+watching in the background for up to an hour and resumes the work when the
+connectivity returns. `/gentle:retry reconnect disable` stops that watch, and
+so does closing the session.
 
 If that is too wide for your setup, pick a narrower scope: `off` turns the
 feature off for the project, `session` requires every session to opt in, and
