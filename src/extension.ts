@@ -40,6 +40,9 @@ const RETRY_STATUS_TEXT = "Transient provider retry";
 const OFF_TEXT = "OFF";
 const ON_TEXT = "ON";
 const RECONNECT_WAIT_MS = 300_000;
+/** How long a session keeps watching for the connectivity after its turn ended. */
+const RECONNECT_FALLBACK_MAX_WAIT_MS = 3_600_000;
+let reconnectFallbackMaxWaitMs = RECONNECT_FALLBACK_MAX_WAIT_MS;
 
 interface ReconnectWaitState {
 	controller: AbortController;
@@ -257,11 +260,23 @@ async function runReconnectWait(
 	wait: ReconnectWaitState,
 ): Promise<void> {
 	try {
+		// The watch is bounded: it ends when the connectivity returns, when the
+		// user stops it, when the budget runs out, or when its own limit is
+		// reached. It never waits forever in the background.
+		const deadline = Date.now() + reconnectFallbackMaxWaitMs;
 		let online = false;
 		while (!online) {
 			if (wait.controller.signal.aborted) return;
 			if (!state.budget.remaining) return;
-			const connectivity = await state.watcher.waitForOnline(RECONNECT_WAIT_MS, wait.controller.signal);
+			if (Date.now() >= deadline) {
+				ctx.ui.notify("Stopped waiting for the network: the reconnect wait reached its limit.", "warning");
+				return;
+			}
+			const remaining = Math.max(1, deadline - Date.now());
+			const connectivity = await state.watcher.waitForOnline(
+				Math.min(RECONNECT_WAIT_MS, remaining),
+				wait.controller.signal,
+			);
 			if (connectivity === "online") {
 				online = true;
 				break;
@@ -297,6 +312,11 @@ async function runReconnectWait(
 	}
 }
 
+/** Stops the reconnect watch of this session, if one is running. */
+function abortReconnectWait(ctx: ExtensionContext): void {
+	reconnectStates.get(sessionKey(ctx))?.wait?.controller.abort();
+}
+
 /** Arms at most one fallback reconnect wait for a session. */
 function armReconnectWait(
 	ctx: ExtensionContext,
@@ -314,6 +334,9 @@ function armReconnectWait(
 		promise: Promise.resolve(),
 	};
 	state.wait = wait;
+	ctx.ui.notify(
+		"The network is still down. This session keeps watching in the background and resumes by itself; use /gentle:retry reconnect disable to stop it.",
+	);
 	wait.promise = runReconnectWait(ctx, pi, state, wait);
 	void wait.promise.catch(() => {});
 }
@@ -474,13 +497,17 @@ function createRetryCommand() {
 			const global = scope === "global";
 			const current = readRetryPolicyValue(ctx.cwd, { global });
 			writeRetryPolicy(current, ctx.cwd, { global, reconnect: scope });
+			if (scope === "off") abortReconnectWait(ctx);
 			ctx.ui.notify(`Reconnect scope set to ${scope} (${global ? "global" : "project"})`);
 			return;
 		}
 		if (trimmed === "reconnect enable" || trimmed === "reconnect disable") {
 			const enabled = trimmed.endsWith("enable");
 			if (enabled) reconnectOptInSessions.add(sessionKey(ctx));
-			else reconnectOptInSessions.delete(sessionKey(ctx));
+			else {
+				reconnectOptInSessions.delete(sessionKey(ctx));
+				abortReconnectWait(ctx);
+			}
 			ctx.ui.notify(`Reconnect ${enabled ? "enabled" : "disabled"} for this session`);
 			return;
 		}
@@ -604,7 +631,9 @@ async function agentBeforeSettleHandler(
 ): Promise<AgentBeforeSettleEventResult | void> {
 	if (event.outcome !== "error") {
 		resetAttempts(ctx);
-		reconnectStates.get(sessionKey(ctx))?.budget.reset();
+		// The reconnect budget is released by real progress only: an aborted
+		// turn is not progress, so it must not hand back the resume allowance.
+		if (event.outcome === "completed") reconnectStates.get(sessionKey(ctx))?.budget.reset();
 		return;
 	}
 	const policy = resolveRetryPolicy(ctx.cwd);
@@ -749,6 +778,9 @@ export function createGentleRetryExtension(): (pi: ExtensionAPI) => void {
 			handler: createRetryCommand(),
 		});
 		guarded.on("session_start", (event, ctx) => sessionStart(event, ctx, pi));
+		guarded.on("session_shutdown", () => {
+			for (const state of reconnectStates.values()) state.wait?.controller.abort();
+		});
 		guarded.on("agent_before_settle", (event, ctx) => agentBeforeSettleHandler(event, ctx, pi));
 	};
 }
@@ -771,6 +803,12 @@ export function resetExtensionState(): void {
 	reconnectStates.clear();
 	reconnectOptInSessions.clear();
 	connectivityFetchForTesting = undefined;
+	reconnectFallbackMaxWaitMs = RECONNECT_FALLBACK_MAX_WAIT_MS;
+}
+
+/** Shortens the background reconnect wait so the tests do not wait an hour. */
+export function setReconnectTimingForTesting(options?: { fallbackMaxWaitMs?: number }): void {
+	if (options?.fallbackMaxWaitMs !== undefined) reconnectFallbackMaxWaitMs = options.fallbackMaxWaitMs;
 }
 
 /** Injects the connectivity request used by the extension's test seam. */

@@ -29,6 +29,7 @@ const {
 	createGentleRetryExtension,
 	resetExtensionState,
 	setConnectivityFetchForTesting,
+	setReconnectTimingForTesting,
 } = extensionModule;
 const { writeRetryPolicy } = policyModule;
 const { readPendingResumes, writePendingResume } = pendingResumeModule;
@@ -393,6 +394,103 @@ test("after an offline turn ends, reconnect sends the continuation once and reco
 	assert.equal(records[0]!.reason, "reconnect");
 	await new Promise((resolve) => setTimeout(resolve, 30));
 	assert.equal(h.sent.length, 1);
+	h.cleanup();
+});
+
+test("an aborted turn does not release the reconnect budget", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, { reconnect: "global" });
+	const outcomes = [
+		false, false, true,
+		false, false, true,
+		false, false, true,
+		false, false, true,
+	];
+	let outcomeIndex = 0;
+	setConnectivityFetchForTesting(async () => {
+		const online = outcomes[outcomeIndex++] ?? true;
+		if (!online) throw new Error("offline");
+		return { ok: true };
+	});
+	const failed = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("service unavailable")] },
+	]);
+
+	for (let resume = 0; resume < 3; resume += 1) {
+		const result = await settle(h, failed) as { continue: boolean };
+		assert.equal(result.continue, true);
+	}
+
+	// An aborted turn is not progress: the budget stays exhausted.
+	await settle(h, settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-aborted", messages: [ASSISTANT_OK()] },
+	], "aborted"));
+	const exhausted = await settle(h, failed);
+	assert.equal(exhausted, undefined);
+	assert.equal(h.notices.filter((notice) => notice.startsWith("Waiting for the network")).length, 3);
+	h.cleanup();
+});
+
+test("the background reconnect wait stops at its own limit", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, { reconnect: "global" });
+	setReconnectTimingForTesting({ fallbackMaxWaitMs: 60 });
+	const originalDateNow = Date.now;
+	let jumpMs = 0;
+	let probes = 0;
+	setConnectivityFetchForTesting(async () => {
+		probes += 1;
+		if (probes === 3) jumpMs += 300_001;
+		throw new Error("offline");
+	});
+	Date.now = () => originalDateNow() + jumpMs;
+	try {
+		const event = settleEvent([
+			{ id: "entry-user", messages: [USER("hello")] },
+			{ id: "entry-assistant", messages: [ASSISTANT_ERROR("service unavailable")] },
+		]);
+		await settle(h, event);
+		await waitFor(() => h.notices.some((notice) => notice.includes("keeps watching in the background")));
+		await waitFor(() => h.notices.some((notice) => notice.includes("reached its limit")));
+	} finally {
+		Date.now = originalDateNow;
+	}
+
+	assert.equal(h.sent.length, 0);
+	h.cleanup();
+});
+
+test("the session opt-out stops the background reconnect wait", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, { reconnect: "global" });
+	const originalDateNow = Date.now;
+	let jumpMs = 0;
+	let probes = 0;
+	let online = false;
+	setConnectivityFetchForTesting(async () => {
+		probes += 1;
+		if (probes === 3) jumpMs += 300_001;
+		if (!online) throw new Error("offline");
+		return { ok: true };
+	});
+	Date.now = () => originalDateNow() + jumpMs;
+	try {
+		const event = settleEvent([
+			{ id: "entry-user", messages: [USER("hello")] },
+			{ id: "entry-assistant", messages: [ASSISTANT_ERROR("service unavailable")] },
+		]);
+		await settle(h, event);
+		await waitFor(() => h.notices.some((notice) => notice.includes("keeps watching in the background")));
+		await h.commands.get("gentle:retry")!.handler("reconnect disable", h.ctx);
+		online = true;
+		await new Promise((resolve) => setTimeout(resolve, 60));
+	} finally {
+		Date.now = originalDateNow;
+	}
+
+	assert.equal(h.sent.length, 0);
 	h.cleanup();
 });
 
