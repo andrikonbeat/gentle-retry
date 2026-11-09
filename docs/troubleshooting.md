@@ -58,6 +58,33 @@ repeat that side effect, so the switch is opt-in.
 What it does not do is keep the work running while the terminal stays closed.
 That needs a session host that owns the run, and Pi does not provide one.
 
+## The agent stopped when the internet went down
+
+Without reconnect mode, a network outage ends the turn: either the error is
+not one gentle-retry retries, or the retry budget runs out while the machine
+still has no route to the internet.
+
+`/gentle:retry reconnect global` makes the extension wait for the connectivity
+and resume the work by itself:
+
+```bash
+/gentle:retry reconnect global   # every live Pi session
+/gentle:retry reconnect session  # only the sessions that opt in
+/gentle:retry reconnect enable   # opt this session in
+/gentle:retry status             # shows "reconnect: global"
+```
+
+The extension checks the connectivity with one small request before it changes
+anything. While the machine is online, a timeout is still just a timeout and
+the retry sequence handles it exactly as before. While the machine is offline,
+the turn waits (five minutes at most, Esc stops it) and then continues by
+itself, either in the same run or with one continuation message.
+
+If that is too wide for your setup, pick a narrower scope: `off` turns the
+feature off for the project, `session` requires every session to opt in, and
+`global` reaches every session on the machine. The scope in effect is always
+shown by `/gentle:retry status` and `/gentle:retry doctor`.
+
 ## It still stops after a failure
 
 Check the failure text. gentle-retry only acts once Pi has exhausted its own

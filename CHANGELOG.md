@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An interactive menu: `/gentle:retry` without arguments opens
   `Gentle retry (current: on)` with every action, so the whole surface is
   configurable from one place.
+- Opt-in reconnect mode: with `/gentle:retry reconnect global` (every live Pi
+  session) or `/gentle:retry reconnect session` (only the sessions that opt
+  in), the extension detects that the machine regained internet connectivity
+  and resumes the interrupted work by itself. A provider timeout on a machine
+  that still has internet keeps the existing retry behaviour. Disabled by
+  default.
 
 ### Changed
 

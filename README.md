@@ -58,6 +58,7 @@ See [Controls](#controls) for the complete command surface. In short:
 /gentle:retry disable    # back to Pi's own retry budget
 /gentle:retry status     # effective state, source, limits, and pause state
 /gentle:retry auto-resume on   # continue an interrupted turn when a session is reopened
+/gentle:retry reconnect global # resume live sessions when the internet comes back
 ```
 
 Run `/gentle:retry` without arguments and the whole surface appears in one
@@ -131,14 +132,15 @@ The command surface is intentionally small:
 /gentle:retry pause
 /gentle:retry resume
 /gentle:retry auto-resume on|off [--global]
+/gentle:retry reconnect off|session|global|enable|disable
 /gentle:retry doctor
 ```
 
 Without arguments, `/gentle:retry` opens an interactive menu titled
 `Gentle retry (current: on)` with every action: enable and disable per project
 or globally, pause and resume for this session, the auto-resume switch, the
-status, and the diagnostics. The argument forms above stay available for
-scripts.
+reconnect scope and session opt-in, the status, and the diagnostics. The
+argument forms above stay available for scripts.
 
 Without `--global`, `enable` and `disable` write the project policy. With
 `--global`, they write the policy in the Gentle AI config home. A valid project
@@ -177,6 +179,46 @@ file to cap a retry sequence:
 elapsed retry sequence time. When either limit is reached, gentle-retry reports
 it and stops instead of retrying. Omit either field to keep that dimension
 unlimited.
+
+## Reconnect after an outage
+
+When the machine loses the internet, a provider call fails and the turn ends.
+`reconnect` mode waits for the connectivity instead and resumes the work on
+its own:
+
+```bash
+/gentle:retry reconnect global   # every live Pi session resumes when the network returns
+/gentle:retry reconnect session  # only the sessions that opt in resume
+/gentle:retry reconnect enable   # opt this session in (scope "session")
+/gentle:retry reconnect disable  # opt this session out
+/gentle:retry reconnect off      # turn the feature off for this project
+```
+
+`global` is written to the global policy: it reaches every Pi session on the
+machine. `session` and `off` are written to the project policy, and a project
+policy still takes precedence over the global one.
+
+The feature is **off by default**, and it never changes what happens on a
+healthy machine:
+
+- A provider timeout while the computer still has internet stays a provider
+  failure: the retry sequence owns it, with the same delay and the same
+  attempts.
+- Only a real outage changes the behaviour. The connectivity probe asks "can
+  this machine reach the internet right now", and one failed probe is not
+  enough: two consecutive failures are required.
+- While the machine is offline the turn waits (up to five minutes, Esc stops
+  it) instead of ending, and that wait consumes no retry attempt.
+- When the connectivity returns, the same turn continues with the failed
+  message left out. If the turn already ended, the work continues in a new run
+  with one continuation message.
+- Billing, authentication, and bad-request failures never wait: no amount of
+  connectivity brings the quota back.
+- One outage resumes at most three times, and a turn is never resumed twice.
+
+A resumed turn can repeat a side effect that already ran (at-least-once), so
+the switch is opt-in. Reconnect covers the sessions that are alive: a session
+whose process already died is resumed by `auto-resume` when you reopen it.
 
 ## How it works
 
