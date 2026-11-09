@@ -9,7 +9,25 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { gentlePiConfigHome, readRetryPolicyValue, resolveRetryPolicy, retryPolicyPaths, writeRetryPolicy } from "./retry-policy.js";
 import { AUTO_RESUME_PROMPT, decideAutoResume, readAutoResumeMarker, writeAutoResumeMarker } from "./auto-resume.js";
-import { classifyTransientFailure, parseRetryAfterMs, TRANSIENT_FAILURE_LABEL } from "./retry-classification.js";
+import { ConnectivityWatcher, type FetchLike } from "./connectivity.js";
+import {
+	decideReconnect,
+	decideReconnectResume,
+	ReconnectBudget,
+	type ReconnectScope,
+} from "./reconnect.js";
+import {
+	hasPendingResume,
+	readPendingResumes,
+	writePendingResume,
+	type PendingResume,
+} from "./pending-resume.js";
+import {
+	classifyPermanentFailure,
+	classifyTransientFailure,
+	parseRetryAfterMs,
+	TRANSIENT_FAILURE_LABEL,
+} from "./retry-classification.js";
 import {
 	ONBOARDING_MESSAGE,
 	readOnboardingMarker,
@@ -21,6 +39,21 @@ import { guardExtensionEvents } from "./stale-context.js";
 const RETRY_STATUS_TEXT = "Transient provider retry";
 const OFF_TEXT = "OFF";
 const ON_TEXT = "ON";
+const RECONNECT_WAIT_MS = 300_000;
+
+interface ReconnectWaitState {
+	controller: AbortController;
+	entryId: string;
+	permanentFailure: boolean;
+	promise: Promise<void>;
+}
+
+interface ReconnectSessionState {
+	watcher: ConnectivityWatcher;
+	budget: ReconnectBudget;
+	offlineWaitMs: number;
+	wait?: ReconnectWaitState;
+}
 
 interface FailedAttempt {
 	index: number;
@@ -30,6 +63,9 @@ interface FailedAttempt {
 const attemptBySession = new Map<string, number>();
 const firstFailureAtBySession = new Map<string, number>();
 const pausedSessions = new Set<string>();
+const reconnectStates = new Map<string, ReconnectSessionState>();
+const reconnectOptInSessions = new Set<string>();
+let connectivityFetchForTesting: FetchLike | undefined;
 
 function sessionKey(ctx: ExtensionContext): string {
 	return ctx.sessionManager?.getSessionId?.() ?? "default";
@@ -39,17 +75,45 @@ function resetAttempts(ctx: ExtensionContext): void {
 	const key = sessionKey(ctx);
 	attemptBySession.delete(key);
 	firstFailureAtBySession.delete(key);
+	const reconnectState = reconnectStates.get(key);
+	if (reconnectState) reconnectState.offlineWaitMs = 0;
 }
 
 function isPaused(ctx: ExtensionContext): boolean {
 	return pausedSessions.has(sessionKey(ctx));
 }
 
+function isReconnectSessionEnabled(ctx: ExtensionContext): boolean {
+	return reconnectOptInSessions.has(sessionKey(ctx));
+}
+
+function reconnectSessionState(ctx: ExtensionContext): ReconnectSessionState {
+	const key = sessionKey(ctx);
+	let state = reconnectStates.get(key);
+	if (!state) {
+		state = {
+			watcher: new ConnectivityWatcher({ fetchImpl: connectivityFetchForTesting }),
+			budget: new ReconnectBudget(),
+			offlineWaitMs: 0,
+		};
+		reconnectStates.set(key, state);
+	}
+	return state;
+}
+
+function reconnectParticipates(scope: ReconnectScope, ctx: ExtensionContext): boolean {
+	return scope === "global" || (scope === "session" && isReconnectSessionEnabled(ctx));
+}
+
 function formatLimit(value: number | undefined, suffix: string): string {
 	return value === undefined ? "unlimited" : `${value}${suffix}`;
 }
 
-function policyStatus(policy: ReturnType<typeof resolveRetryPolicy>, paused: boolean): string {
+function policyStatus(
+	policy: ReturnType<typeof resolveRetryPolicy>,
+	paused: boolean,
+	reconnectSessionEnabled: boolean,
+): string {
 	return [
 		`${RETRY_STATUS_TEXT} ${policy.policy === "on" ? ON_TEXT : OFF_TEXT}`,
 		`source: ${policy.source}${policy.malformed ? `, malformed ${policy.malformedSource ?? "file"}` : ""}`,
@@ -58,6 +122,8 @@ function policyStatus(policy: ReturnType<typeof resolveRetryPolicy>, paused: boo
 		`max elapsed: ${formatLimit(policy.maxElapsedMs, "ms")}`,
 		`paused: ${paused ? "yes" : "no"}`,
 		`auto resume: ${policy.autoResume ? ON_TEXT : OFF_TEXT}`,
+		`reconnect: ${policy.reconnect}`,
+		`reconnect session opt-in: ${reconnectSessionEnabled ? "yes" : "no"}`,
 	].join(" | ");
 }
 
@@ -131,6 +197,147 @@ function toolCallIdsOf(entry: ProjectedSessionEntry): string[] {
 	return ids;
 }
 
+function branchEntryHasUserMessage(entry: unknown): boolean {
+	if (typeof entry !== "object" || entry === null) return false;
+	const candidate = entry as {
+		message?: { role?: unknown };
+		messages?: Array<{ role?: unknown }>;
+	};
+	if (candidate.message?.role === "user") return true;
+	return Array.isArray(candidate.messages) && candidate.messages.some((message) => message.role === "user");
+}
+
+/**
+ * The id of the user entry whose turn was interrupted. The branch is the
+ * source of truth, matching auto-resume's session-entry shape. The boundary
+ * preview is only a fallback for embedders that do not expose a branch.
+ */
+function interruptedUserEntryId(
+	ctx: ExtensionContext,
+	event?: AgentBeforeSettleEvent,
+): string | undefined {
+	const branch = ctx.sessionManager?.getBranch?.() ?? [];
+	for (let index = branch.length - 1; index >= 0; index -= 1) {
+		const entry = branch[index] as { id?: unknown } | undefined;
+		if (!branchEntryHasUserMessage(entry)) continue;
+		if (typeof entry?.id === "string" && entry.id.length > 0) return entry.id;
+	}
+	const entries = event?.context.contextEntries ?? [];
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index]!;
+		const hasUser = entry.messages.some((message) => (message as { role?: unknown }).role === "user");
+		if (hasUser && entry.sourceEntry.id.length > 0) return entry.sourceEntry.id;
+	}
+	return undefined;
+}
+
+function pendingResumes(configHome: string): PendingResume[] {
+	try {
+		return readPendingResumes(configHome);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * A single failed probe is not enough to declare an outage. When this probe
+ * is the first consecutive failure, the second one establishes the offline
+ * state required by the connectivity contract.
+ */
+async function machineIsOffline(watcher: ConnectivityWatcher): Promise<boolean> {
+	let state = await watcher.refresh();
+	if (watcher.consecutiveFailures === 1 && state !== "offline") state = await watcher.refresh();
+	return state === "offline";
+}
+
+async function runReconnectWait(
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+	state: ReconnectSessionState,
+	wait: ReconnectWaitState,
+): Promise<void> {
+	try {
+		let online = false;
+		while (!online) {
+			if (wait.controller.signal.aborted) return;
+			if (!state.budget.remaining) return;
+			const connectivity = await state.watcher.waitForOnline(RECONNECT_WAIT_MS, wait.controller.signal);
+			if (connectivity === "online") {
+				online = true;
+				break;
+			}
+		}
+
+		const policy = resolveRetryPolicy(ctx.cwd);
+		const configHome = gentlePiConfigHome();
+		const decision = decideReconnectResume({
+			scope: policy.reconnect,
+			sessionEnabled: isReconnectSessionEnabled(ctx),
+			policyMalformed: policy.malformed === true,
+			machineOnline: true,
+			permanentFailure: wait.permanentFailure,
+			budgetRemaining: state.budget.remaining,
+			pendingResumes: pendingResumes(configHome),
+			sessionId: sessionKey(ctx),
+			entryId: wait.entryId,
+		});
+		if (decision.action === "resume") {
+			pi.sendUserMessage(decision.prompt, { deliverAs: "followUp" });
+			writePendingResume(configHome, {
+				sessionId: sessionKey(ctx),
+				entryId: wait.entryId,
+				reason: "reconnect",
+			});
+			state.budget.consume();
+		}
+	} catch {
+		// A failed handoff leaves the turn resumable by a later reconnect wait.
+	} finally {
+		if (state.wait === wait) state.wait = undefined;
+	}
+}
+
+/** Arms at most one fallback reconnect wait for a session. */
+function armReconnectWait(
+	ctx: ExtensionContext,
+	pi: ExtensionAPI,
+	entryId: string | undefined,
+	permanentFailure: boolean,
+): void {
+	if (!entryId) return;
+	const state = reconnectSessionState(ctx);
+	if (state.wait || !state.budget.remaining) return;
+	const wait: ReconnectWaitState = {
+		controller: new AbortController(),
+		entryId,
+		permanentFailure,
+		promise: Promise.resolve(),
+	};
+	state.wait = wait;
+	wait.promise = runReconnectWait(ctx, pi, state, wait);
+	void wait.promise.catch(() => {});
+}
+
+/** Builds the same context omission used by the normal retry path. */
+function continuationResult(
+	ctx: ExtensionContext,
+	event: AgentBeforeSettleEvent,
+	failed: FailedAttempt,
+	notice: string,
+): AgentBeforeSettleEventResult | undefined {
+	const alreadyTargeted = new Set(
+		event.entries
+			.filter((entry): entry is ContextEditEntryDraft => entry.type === "context_edit")
+			.map((entry) => entry.targetId),
+	);
+	const drafts = omissionDrafts(event.context.contextEntries, failed).filter(
+		(draft) => !alreadyTargeted.has(draft.targetId),
+	);
+	if (drafts.length === 0) return undefined;
+	ctx.ui.notify(notice);
+	return { entries: [...event.entries, ...drafts], continue: true };
+}
+
 /**
  * Omits the failed assistant message (and any tool results it produced) from
  * the model projection, matching what Pi's own retry recovery does.
@@ -174,6 +381,7 @@ async function openRetryMenu(
 ): Promise<void> {
 	const policy = resolveRetryPolicy(ctx.cwd);
 	const paused = isPaused(ctx);
+	const reconnectSessionEnabled = isReconnectSessionEnabled(ctx);
 	const entries = [
 		{ label: "Enable for this project", action: "enable" },
 		{ label: "Disable for this project", action: "disable" },
@@ -187,10 +395,20 @@ async function openRetryMenu(
 			label: policy.autoResume ? "Auto-resume: off" : "Auto-resume: on",
 			action: `auto-resume ${policy.autoResume ? "off" : "on"}`,
 		},
+		{ label: "Reconnect: global (every open session)", action: "reconnect global" },
+		{ label: "Reconnect: session (opt-in per session)", action: "reconnect session" },
+		{ label: "Reconnect: off (this project)", action: "reconnect off" },
+		{
+			label: reconnectSessionEnabled ? "Reconnect for this session: off" : "Reconnect for this session: on",
+			action: reconnectSessionEnabled ? "reconnect disable" : "reconnect enable",
+		},
 		{ label: "Show status", action: "status" },
 		{ label: "Show diagnostics", action: "doctor" },
 	];
-	const selected = await ctx.ui.select(`Gentle retry (current: ${policy.policy})`, entries.map((entry) => entry.label));
+	const selected = await ctx.ui.select(
+		`Gentle retry (current: ${policy.policy})`,
+		entries.map((entry) => entry.label),
+	);
 	if (selected === undefined) return;
 	const chosen = entries.find((entry) => entry.label === selected);
 	if (!chosen) return;
@@ -206,8 +424,9 @@ function createRetryCommand() {
 		const trimmed = args.trim().toLowerCase();
 		const policy = resolveRetryPolicy(ctx.cwd);
 		const paused = isPaused(ctx);
+		const reconnectSessionEnabled = isReconnectSessionEnabled(ctx);
 		if (!trimmed || trimmed === "status") {
-			ctx.ui.notify(policyStatus(policy, paused));
+			ctx.ui.notify(policyStatus(policy, paused, reconnectSessionEnabled));
 			return;
 		}
 		if (trimmed === "enable" || trimmed === "enable --global") {
@@ -250,6 +469,21 @@ function createRetryCommand() {
 			ctx.ui.notify(`Auto-resume ${enabled ? "enabled" : "disabled"} (${global ? "global" : "project"})`);
 			return;
 		}
+		if (trimmed === "reconnect off" || trimmed === "reconnect session" || trimmed === "reconnect global") {
+			const scope = trimmed.slice("reconnect ".length) as ReconnectScope;
+			const global = scope === "global";
+			const current = readRetryPolicyValue(ctx.cwd, { global });
+			writeRetryPolicy(current, ctx.cwd, { global, reconnect: scope });
+			ctx.ui.notify(`Reconnect scope set to ${scope} (${global ? "global" : "project"})`);
+			return;
+		}
+		if (trimmed === "reconnect enable" || trimmed === "reconnect disable") {
+			const enabled = trimmed.endsWith("enable");
+			if (enabled) reconnectOptInSessions.add(sessionKey(ctx));
+			else reconnectOptInSessions.delete(sessionKey(ctx));
+			ctx.ui.notify(`Reconnect ${enabled ? "enabled" : "disabled"} for this session`);
+			return;
+		}
 		if (trimmed === "doctor") {
 			const configHome = gentlePiConfigHome();
 			const paths = retryPolicyPaths(ctx.cwd);
@@ -261,6 +495,8 @@ function createRetryCommand() {
 				`max elapsed: ${formatLimit(policy.maxElapsedMs, "ms")}`,
 				`paused: ${paused ? "yes" : "no"}`,
 				`auto resume: ${policy.autoResume ? ON_TEXT : OFF_TEXT}`,
+				`reconnect: ${policy.reconnect}`,
+				`reconnect session opt-in: ${reconnectSessionEnabled ? "yes" : "no"}`,
 				`project policy: ${paths.project}`,
 				`global policy: ${paths.global}`,
 				`config home: ${configHome}`,
@@ -270,7 +506,7 @@ function createRetryCommand() {
 			return;
 		}
 		ctx.ui.notify(
-			"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|auto-resume <on|off> [--global]|doctor. State unchanged.",
+			"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|auto-resume <on|off> [--global]|reconnect <off|session|global|enable|disable>|doctor. State unchanged.",
 		);
 	};
 }
@@ -329,13 +565,23 @@ function autoResumeOnSessionStart(event: SessionStartEvent, ctx: ExtensionContex
 		sessionId,
 	});
 	if (!decision.resume) return;
+	if (hasPendingResume(readPendingResumes(configHome), sessionId, decision.entryId)) return;
 	try {
 		pi.sendUserMessage(decision.prompt);
 	} catch {
 		// A session that cannot take the message yet leaves the turn resumable.
 		return;
 	}
-	writeAutoResumeMarker(configHome, { sessionId, entryId: decision.entryId });
+	try {
+		writePendingResume(configHome, { sessionId, entryId: decision.entryId, reason: "auto-resume" });
+	} catch {
+		// The legacy marker below still protects auto-resume from repeating.
+	}
+	try {
+		writeAutoResumeMarker(configHome, { sessionId, entryId: decision.entryId });
+	} catch {
+		// A read-only home must not break the session start.
+	}
 	ctx.ui?.notify?.("Resuming the interrupted turn…", "info");
 }
 
@@ -354,22 +600,90 @@ function sessionStart(event: SessionStartEvent, ctx: ExtensionContext, pi: Exten
 async function agentBeforeSettleHandler(
 	event: AgentBeforeSettleEvent,
 	ctx: ExtensionContext,
+	pi: ExtensionAPI,
 ): Promise<AgentBeforeSettleEventResult | void> {
 	if (event.outcome !== "error") {
 		resetAttempts(ctx);
+		reconnectStates.get(sessionKey(ctx))?.budget.reset();
 		return;
 	}
 	const policy = resolveRetryPolicy(ctx.cwd);
+	const failed = findFailedAttempt(event.context.contextEntries);
+	if (!failed) {
+		resetAttempts(ctx);
+		return;
+	}
+
+	const permanentFailure = classifyPermanentFailure(failed.errorMessage) !== undefined;
+	if (reconnectParticipates(policy.reconnect, ctx)) {
+		const reconnectState = reconnectSessionState(ctx);
+		const machineOffline = await machineIsOffline(reconnectState.watcher);
+		let configHome: string | undefined;
+		try {
+			configHome = gentlePiConfigHome();
+		} catch {
+			configHome = undefined;
+		}
+		const entryId = interruptedUserEntryId(ctx, event);
+		const decision = decideReconnect({
+			scope: policy.reconnect,
+			sessionEnabled: isReconnectSessionEnabled(ctx),
+			policyMalformed: policy.malformed === true,
+			machineOffline,
+			permanentFailure,
+			budgetRemaining: reconnectState.budget.remaining,
+			pendingResumes: configHome ? pendingResumes(configHome) : [],
+			sessionId: sessionKey(ctx),
+			entryId: entryId ?? "",
+		});
+		if (decision.action === "wait") {
+			const kind = classifyTransientFailure(failed.errorMessage);
+			const key = sessionKey(ctx);
+			if (kind) {
+				firstFailureAtBySession.set(key, firstFailureAtBySession.get(key) ?? Date.now());
+			}
+			ctx.ui.notify("Waiting for the network to come back… Press Esc to stop.");
+			const waitStartedAt = Date.now();
+			let connectivity: Awaited<ReturnType<ConnectivityWatcher["waitForOnline"]>>;
+			let aborted = false;
+			try {
+				connectivity = await reconnectState.watcher.waitForOnline(RECONNECT_WAIT_MS, ctx.signal);
+			} catch {
+				aborted = true;
+				connectivity = reconnectState.watcher.state;
+			} finally {
+				reconnectState.offlineWaitMs += Math.max(0, Date.now() - waitStartedAt);
+			}
+			if (aborted) {
+				resetAttempts(ctx);
+				return;
+			}
+			if (connectivity === "online") {
+				const result = continuationResult(
+					ctx,
+					event,
+					failed,
+					"Continuing after the network outage…",
+				);
+				if (result) reconnectState.budget.consume();
+				return result;
+			}
+
+			// The bounded primary wait ended while the machine was still offline.
+			// The turn ends as it normally would, and one fallback wait owns the
+			// continuation until the connectivity returns.
+			resetAttempts(ctx);
+			armReconnectWait(ctx, pi, entryId, false);
+			return;
+		}
+	}
+
+	// From here on the existing provider retry path is unchanged.
 	if (policy.policy !== "on") {
 		resetAttempts(ctx);
 		return;
 	}
 	if (isPaused(ctx)) {
-		resetAttempts(ctx);
-		return;
-	}
-	const failed = findFailedAttempt(event.context.contextEntries);
-	if (!failed) {
 		resetAttempts(ctx);
 		return;
 	}
@@ -389,7 +703,9 @@ async function agentBeforeSettleHandler(
 		);
 		return;
 	}
-	const elapsedMs = Date.now() - firstFailureAt;
+	const reconnectState = reconnectStates.get(key);
+	const offlineWaitMs = reconnectState?.offlineWaitMs ?? 0;
+	const elapsedMs = Math.max(0, Date.now() - firstFailureAt - offlineWaitMs);
 	if (policy.maxElapsedMs !== undefined && elapsedMs >= policy.maxElapsedMs) {
 		ctx.ui.notify(
 			`Retry stopped: maximum elapsed time reached (${policy.maxElapsedMs}ms). Use /gentle:retry resume to start a new sequence.`,
@@ -414,17 +730,12 @@ async function agentBeforeSettleHandler(
 		resetAttempts(ctx);
 		return;
 	}
-	const alreadyTargeted = new Set(
-		event.entries
-			.filter((entry): entry is ContextEditEntryDraft => entry.type === "context_edit")
-			.map((entry) => entry.targetId),
+	return continuationResult(
+		ctx,
+		event,
+		failed,
+		`Continuing after ${TRANSIENT_FAILURE_LABEL[kind]} (attempt ${attempt})…`,
 	);
-	const drafts = omissionDrafts(event.context.contextEntries, failed).filter(
-		(draft) => !alreadyTargeted.has(draft.targetId),
-	);
-	if (drafts.length === 0) return;
-	ctx.ui.notify(`Continuing after ${TRANSIENT_FAILURE_LABEL[kind]} (attempt ${attempt})…`);
-	return { entries: [...event.entries, ...drafts], continue: true };
 }
 
 export function createGentleRetryExtension(): (pi: ExtensionAPI) => void {
@@ -438,7 +749,7 @@ export function createGentleRetryExtension(): (pi: ExtensionAPI) => void {
 			handler: createRetryCommand(),
 		});
 		guarded.on("session_start", (event, ctx) => sessionStart(event, ctx, pi));
-		guarded.on("agent_before_settle", agentBeforeSettleHandler);
+		guarded.on("agent_before_settle", (event, ctx) => agentBeforeSettleHandler(event, ctx, pi));
 	};
 }
 
@@ -454,6 +765,17 @@ export function resetExtensionState(): void {
 	attemptBySession.clear();
 	firstFailureAtBySession.clear();
 	pausedSessions.clear();
+	for (const state of reconnectStates.values()) {
+		state.wait?.controller.abort();
+	}
+	reconnectStates.clear();
+	reconnectOptInSessions.clear();
+	connectivityFetchForTesting = undefined;
+}
+
+/** Injects the connectivity request used by the extension's test seam. */
+export function setConnectivityFetchForTesting(fetchImpl?: FetchLike): void {
+	connectivityFetchForTesting = fetchImpl;
 }
 
 export type { RetryPolicyValue, ResolvedRetryPolicy } from "./retry-policy.js";

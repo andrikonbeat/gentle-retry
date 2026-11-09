@@ -190,7 +190,7 @@ test("invalid subcommand shows usage and leaves state unchanged", async () => {
 	await h.commands.get("gentle:retry")!.handler("invalid", h.ctx);
 	assert.equal(
 		h.notices.at(-1),
-		"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|auto-resume <on|off> [--global]|doctor. State unchanged.",
+		"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|auto-resume <on|off> [--global]|reconnect <off|session|global|enable|disable>|doctor. State unchanged.",
 	);
 	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
 	assert.match(h.notices.at(-1)!, /ON/);
@@ -749,6 +749,10 @@ test("the menu offers every action of the command surface", async () => {
 		"Disable for every project",
 		"Pause retrying in this session",
 		"Auto-resume: on",
+		"Reconnect: global (every open session)",
+		"Reconnect: session (opt-in per session)",
+		"Reconnect: off (this project)",
+		"Reconnect for this session: on",
 		"Show status",
 		"Show diagnostics",
 	]) {
