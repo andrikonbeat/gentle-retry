@@ -1,0 +1,71 @@
+# gentle-retry — reconnect mode: resume live sessions after an internet outage
+
+Objective: add a menu-activated feature that detects that the machine regained internet connectivity and resumes the interrupted work of the live Pi sessions, with a configurable scope (every open Pi session, or only the sessions with Reconnect mode enabled).
+Branch: `feat/reconnect-mode` (based on `feat/auto-resume`); delivery: one work-unit commit per task on the feature branch; test runner: `node --experimental-strip-types --test tests/*.test.ts` plus `tsc --noEmit -p tsconfig.json`.
+
+## Specs
+
+- **S1** — Original request, verbatim: "Quiero implementar una nueva funcion que cuando este activa en el menu va a detectar cuando el ordenador recupere la conexion luego de una desconexion a internet y va a reanudar las sessiones que esten activas tambien va a ser posible configurar si funciona de manera globar va a reanudar todas las sesiones de pi abiertas o solo las sesiones con el modo Reconect activado. antes de hacer nada dime como lo vamos a implementar."
+
+- **S2** — "antes de hacer nada dime como lo vamos a implementar." The implementation plan is delivered and agreed before any source change: the plan, the collision rules, the two resume paths, and the scope decision are recorded in this document before the first source write.
+
+- **S3** — Scope of "resume the open Pi sessions", decided by the user: "Solo sesiones vivas (recomendado)" — "Solo las sesiones cuyo proceso de Pi sigue vivo (la terminal abierta). Cada proceso reanuda su propio turno cuando vuelve la red. Simple, sin procesos extra, sin cuotas surprise. Cubre el caso real: “se me cortó internet y al volver sigue trabajando”." No headless relaunch of transcripts whose process died, and no cross-process control.
+
+- **S4** — Activation happens from the interactive menu: the feature is turned on and off from the `/gentle:retry` menu, next to the existing entries, and its state is visible in the menu, in `/gentle:retry status`, and in `/gentle:retry doctor`.
+
+- **S5** — Detection: the extension determines that the machine regained connectivity after an internet disconnection and reacts to that transition.
+
+- **S6** — Scope configuration: "va a ser posible configurar si funciona de manera globar va a reanudar todas las sesiones de pi abiertas o solo las sesiones con el modo Reconect activado". Two modes: `global` resumes every live Pi session that runs the extension; `session` resumes only the sessions with Reconnect mode enabled.
+
+- **S7** — Provider timeout while the machine still has internet, verbatim: "Explicame como manejamos cuando el modelo da error de timeout pero todavia el ordenador tiene internet quiero saber si no chocan las implementaciones y demas". The existing retry path is unchanged in that case: a timeout is a provider failure, and the connectivity probe — not the error text — decides whether the machine is offline. The reconnect feature never replaces the retry path and never changes its delay, attempt count, or eligibility rules.
+
+- **S8** — "cuando el ordenador no tiene internet el agente deja de trabajar." With the feature enabled, a turn that fails while the machine is offline waits for the connectivity to return (bounded) instead of ending, and resumes by itself. The wait is visible and cancellable with Esc.
+
+- **S9** — Resume mechanics, verbatim: "y como reanuda enviandole un prompt ?" Two paths: the primary path continues the same run inside the `agent_before_settle` boundary without any new prompt, omitting the failed assistant message; the fallback path, used only when the turn already ended, sends a continuation prompt with `pi.sendUserMessage()`.
+
+- **S10** — The continuation prompt of the fallback path is exactly: "The network connection was restored. Continue from where you left off without repeating completed work." It is a stable constant, and a turn that already received it is never continued twice.
+
+- **S11** — One shared pending-resume record: auto-resume and reconnect never continue the same turn twice. The record holds the session id, the entry id, the timestamp, and the reason (`auto-resume` or `reconnect`), and the first path that continues a turn consumes it.
+
+- **S12** — Budgets: the feature is off by default; at most 3 resume attempts per outage; the connectivity probe only runs while a network failure is pending, so a healthy session makes no requests.
+
+- **S13** — Probe rules: the probe performs a real HTTP request with a timeout against a configurable endpoint (default `https://registry.npmjs.org/-/ping`), a single failed probe never declares the machine offline (two consecutive failures are required), and a successful probe clears the offline state. The watcher keeps no background timer: probes happen only when a caller asks for one, so a healthy session makes no requests and the watcher never keeps the Pi process alive.
+
+- **S14** — Counters: `maxAttempts` counts provider attempts only, and `maxElapsedMs` excludes the time spent waiting for the connectivity, so a long outage does not exhaust the elapsed budget. The reconnect budget (waits and resumes per outage) is separate and is the one that stops the loop.
+
+- **S15** — Tests cover: a timeout with a successful probe follows exactly today's retry path (same attempt count, same delay); a failure with a failed probe waits without consuming an attempt; a non-classified outage error waits and resumes when the connectivity returns; auto-resume and reconnect never continue the same turn; the probe does not run while the session is healthy; the feature is off by default.
+
+- **S16** — Documentation: README, `docs/troubleshooting.md`, and `CHANGELOG.md` describe the feature, the scopes, the budgets, and the at-least-once risk of a resumed turn.
+
+- **S17** — The previous behavior of "/gentle:retry enable [--global]", "/gentle:retry disable [--global]", "/gentle:retry status", "/gentle:retry pause", "/gentle:retry resume", "/gentle:retry auto-resume on|off [--global]", and "/gentle:retry doctor" is preserved. With the feature off, the extension behaves exactly as before.
+
+## Tasks
+
+| ID | Specs | Route | Status | Commit / Evidence |
+| --- | --- | --- | --- | --- |
+| T1 | S5, S13 | inline (parent) | done | commit `dd9011b`; 13/13 focused tests |
+| T2 | S3, S6, S10, S11, S14 | inline (parent) | pending | reconnect decision module, policy field, shared pending record + tests |
+| T3 | S4, S7, S8, S9, S15, S17 | inline (parent) | pending | extension wiring, menu, status/doctor + tests |
+| T4 | S16 | inline (parent) | pending | docs + full verification + feature close |
+
+## Log
+
+- **L1** — Verbatim: "Quiero implementar una nueva funcion que cuando este activa en el menu va a detectar cuando el ordenador recupere la conexion luego de una desconexion a internet y va a reanudar las sessiones que esten activas tambien va ser posible configurar si funciona de manera globar va a reanudar todas las sesiones de pi abiertas o solo las sesiones con el modo Reconect activado. antes de hacer nada dime como lo vamos a implementar."
+
+- **L2** — Plan delivered before any source write (S2): a per-process connectivity watcher, the `reconnect: "off" | "session" | "global"` setting, two resume levels, a durable marker, the affected files, and the risk table. The user then narrowed the scope and confirmed the collision rules and the two resume paths.
+
+- **L3** — Scope decision (S3): the user selected "Solo sesiones vivas (recomendado)". Each live Pi process resumes its own turn; no process spawns or controls another session, and transcripts whose process died are out of scope.
+
+- **L4** — Collision rules (S7, S8, S14): a provider timeout and a machine outage are two different axes. The probe decides connectivity, never the error text; a timeout with a successful probe follows today's retry path unchanged. `maxAttempts` counts provider attempts only, `maxElapsedMs` excludes offline waits, and the reconnect budget is separate. One owner of the wait: the `agent_before_settle` handler waits; the watcher only reports connectivity.
+
+- **L5** — Resume paths (S9, S10, S11): the primary path continues the same run inside the boundary, without a new prompt, omitting the failed assistant message. The fallback path, for a turn that already ended, sends the continuation prompt with `pi.sendUserMessage()`, which always triggers a turn and is queued as a follow-up when another turn is running. Auto-resume and reconnect share one pending-resume record so the same turn is never continued twice.
+
+- **L6** — Probe defaults: endpoint `https://registry.npmjs.org/-/ping`, two consecutive failures to declare the machine offline, the probe runs only while a network failure is pending, and the timer is unreferenced so it never keeps Pi alive.
+
+- **L7** — Routing: the implementation is inline (the parent), one work unit per task, with the test-first rule applied per observable rule. The test conventions were mapped by a read-only explorer subagent to keep the parent's context bounded.
+
+- **L8** — Delivery: the branch `feat/reconnect-mode` is based on `feat/auto-resume` and continues the `feature-branch-chain` strategy (L11 of the auto-resume feature). No push and no pull request are created by this implementation: both remain human decisions.
+
+- **L9** — T1 evidence (S5, S13): RED observed first (`ERR_MODULE_NOT_FOUND` for the missing module), then GREEN with 13/13 focused tests (`node --experimental-strip-types --test tests/connectivity.test.ts`). Commit `dd9011b` (`feat: add connectivity watcher for reconnect mode`, 277 inserted lines). The test conventions were mapped by the read-only explorer `mw8jomoh-1-4ueb`: the tests import `../src/*.ts` without the `.js` suffix and register a `registerHooks` resolver that remaps the `.js` specifiers emitted by the sources.
+
+- **L10** — Spec refinement, before the implementation of T1: S13 said "the probe timer never keeps the Pi process alive". The implementation gives the watcher no background timer at all — probes happen only inside an explicit wait, and the polling timer is cleared when the wait ends. A ref'd timer during a wait would be wrong: the pending promise alone does not keep the Node event loop alive, so the process could exit in the middle of a reconnect wait. S13 was rewritten accordingly.

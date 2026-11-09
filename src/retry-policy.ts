@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { atomicWriteFileSync } from "./atomic-write.js";
+import { RECONNECT_SCOPES, type ReconnectScope } from "./reconnect.js";
 
 export const RETRY_POLICY_SCHEMA = "gentle-pi.retry/v1";
 export const RETRY_POLICY_FILE = "retry-policy.json";
@@ -18,6 +19,7 @@ export interface RetryPolicyFile {
 	maxAttempts?: number;
 	maxElapsedMs?: number;
 	autoResume?: boolean;
+	reconnect?: ReconnectScope;
 }
 
 type ReadResult = RetryPolicyFile | { malformed: true } | null;
@@ -29,6 +31,7 @@ export interface ResolvedRetryPolicy {
 	maxAttempts?: number;
 	maxElapsedMs?: number;
 	autoResume: boolean;
+	reconnect: ReconnectScope;
 	source: "project_file" | "global_file" | "default";
 	malformed?: true;
 	malformedSource?: "project_file" | "global_file";
@@ -75,7 +78,7 @@ function parseRetryPolicyFile(content: string): RetryPolicyFile | null {
 	) {
 		return null;
 	}
-	const { schema, policy, baseDelayMs, maxDelayMs, maxAttempts, maxElapsedMs, autoResume, ...rest } = parsed as Record<string, unknown>;
+	const { schema, policy, baseDelayMs, maxDelayMs, maxAttempts, maxElapsedMs, autoResume, reconnect, ...rest } = parsed as Record<string, unknown>;
 	if (schema !== RETRY_POLICY_SCHEMA) return null;
 	if (policy !== "on" && policy !== "off") return null;
 	if (Object.keys(rest).length > 0) return null;
@@ -84,6 +87,7 @@ function parseRetryPolicyFile(content: string): RetryPolicyFile | null {
 	const ma = maxAttempts as number | undefined;
 	const me = maxElapsedMs as number | undefined;
 	const ar = autoResume as boolean | undefined;
+	const rc = reconnect as ReconnectScope | undefined;
 	const effectiveBaseDelayMs = bd ?? RETRY_POLICY_DEFAULT_BASE_DELAY_MS;
 	const effectiveMaxDelayMs = md ?? RETRY_POLICY_DEFAULT_MAX_DELAY_MS;
 	if (!Number.isInteger(effectiveBaseDelayMs) || effectiveBaseDelayMs <= 0) return null;
@@ -92,6 +96,7 @@ function parseRetryPolicyFile(content: string): RetryPolicyFile | null {
 	if (ma !== undefined && (!Number.isInteger(ma) || ma <= 0)) return null;
 	if (me !== undefined && (!Number.isInteger(me) || me <= 0)) return null;
 	if (ar !== undefined && typeof ar !== "boolean") return null;
+	if (rc !== undefined && !RECONNECT_SCOPES.includes(rc)) return null;
 	return {
 		schema,
 		policy: policy as RetryPolicyValue,
@@ -100,6 +105,7 @@ function parseRetryPolicyFile(content: string): RetryPolicyFile | null {
 		maxAttempts: ma,
 		maxElapsedMs: me,
 		autoResume: ar,
+		reconnect: rc,
 	};
 }
 
@@ -126,6 +132,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 			maxAttempts: projectFile.maxAttempts,
 			maxElapsedMs: projectFile.maxElapsedMs,
 			autoResume: projectFile.autoResume ?? false,
+			reconnect: projectFile.reconnect ?? "off",
 			source: "project_file",
 		};
 	}
@@ -135,6 +142,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 			baseDelayMs: RETRY_POLICY_DEFAULT_BASE_DELAY_MS,
 			maxDelayMs: RETRY_POLICY_DEFAULT_MAX_DELAY_MS,
 			autoResume: false,
+			reconnect: "off",
 			source: "default",
 			malformed: true,
 			malformedSource: "project_file",
@@ -150,6 +158,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 			maxAttempts: globalFile.maxAttempts,
 			maxElapsedMs: globalFile.maxElapsedMs,
 			autoResume: globalFile.autoResume ?? false,
+			reconnect: globalFile.reconnect ?? "off",
 			source: "global_file",
 		};
 	}
@@ -159,6 +168,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 			baseDelayMs: RETRY_POLICY_DEFAULT_BASE_DELAY_MS,
 			maxDelayMs: RETRY_POLICY_DEFAULT_MAX_DELAY_MS,
 			autoResume: false,
+			reconnect: "off",
 			source: "default",
 			malformed: true,
 			malformedSource: "global_file",
@@ -169,6 +179,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 		baseDelayMs: RETRY_POLICY_DEFAULT_BASE_DELAY_MS,
 		maxDelayMs: RETRY_POLICY_DEFAULT_MAX_DELAY_MS,
 		autoResume: false,
+		reconnect: "off",
 		source: "default",
 	};
 }
@@ -194,6 +205,7 @@ export function writeRetryPolicy(
 		maxAttempts?: number;
 		maxElapsedMs?: number;
 		autoResume?: boolean;
+		reconnect?: ReconnectScope;
 		global?: boolean;
 	},
 ): void {
@@ -206,18 +218,21 @@ export function writeRetryPolicy(
 	let maxAttempts: number | undefined;
 	let maxElapsedMs: number | undefined;
 	let autoResume: boolean | undefined;
+	let reconnect: ReconnectScope | undefined;
 	if (current && !("malformed" in current)) {
 		baseDelayMs = current.baseDelayMs ?? RETRY_POLICY_DEFAULT_BASE_DELAY_MS;
 		maxDelayMs = current.maxDelayMs ?? RETRY_POLICY_DEFAULT_MAX_DELAY_MS;
 		maxAttempts = current.maxAttempts;
 		maxElapsedMs = current.maxElapsedMs;
 		autoResume = current.autoResume;
+		reconnect = current.reconnect;
 	}
 	if (options?.baseDelayMs !== undefined) baseDelayMs = options.baseDelayMs;
 	if (options?.maxDelayMs !== undefined) maxDelayMs = options.maxDelayMs;
 	if (options?.maxAttempts !== undefined) maxAttempts = options.maxAttempts;
 	if (options?.maxElapsedMs !== undefined) maxElapsedMs = options.maxElapsedMs;
 	if (options?.autoResume !== undefined) autoResume = options.autoResume;
+	if (options?.reconnect !== undefined) reconnect = options.reconnect;
 	const content = JSON.stringify({
 		schema: RETRY_POLICY_SCHEMA,
 		policy,
@@ -226,6 +241,7 @@ export function writeRetryPolicy(
 		...(maxAttempts !== undefined ? { maxAttempts } : {}),
 		...(maxElapsedMs !== undefined ? { maxElapsedMs } : {}),
 		...(autoResume !== undefined ? { autoResume } : {}),
+		...(reconnect !== undefined ? { reconnect } : {}),
 	}, null, "\t");
 	atomicWriteFileSync(targetPath, content, { mode: 0o600 });
 }
