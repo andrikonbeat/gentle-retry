@@ -39,6 +39,8 @@ Branch: `feat/auto-resume` (based on `feat/retry-hardening`); delivery: one work
 
 - **S14** — Publishing to npm remains a separate human-authorized action and is not executed by this implementation.
 
+- **S15** — "/gentle:retry" without arguments opens an interactive menu titled "Gentle retry (current: on)" when the session can show a selector. The menu offers every action of the command surface: enable and disable for the project and for every project, pause and resume for the session, the auto-resume toggle, status, and diagnostics. Choosing an entry runs exactly the same action as the matching command argument. Cancelling the menu changes nothing. A session without a selector keeps the previous behaviour and reports the status.
+
 ## Tasks
 
 | ID | Specs | Route | Status | Commit / Evidence |
@@ -46,6 +48,7 @@ Branch: `feat/auto-resume` (based on `feat/retry-hardening`); delivery: one work
 | T1 | S3-S8, S11-S12 | inline (parent; the delegated worker failed) | done | commit `0ac6f74`; 76/76 focused tests |
 | T2 | S1-S2, S9-S10 | inline (parent) | done | 105/105 full suite, typecheck exit 0, differential check clean |
 | T3 | S13-S14 | inline (parent) | done | packed artifact verified; npm publish still human-gated |
+| T4 | S15 | inline (parent) | done | commit `98fc9a9`; 79/79 focused, 108/108 full suite |
 
 ## Log
 
@@ -70,3 +73,9 @@ Branch: `feat/auto-resume` (based on `feat/retry-hardening`); delivery: one work
 - **L10** — Native assessment: `gentle_review assess` with `baseRef e5de009` and `committedOnly` returned risk `medium`, native risk `unassessable` (the untracked feature document needs an explicit declaration), native outcome `unknown`, and the plan "writer self-verification, no independent verifier". No native review was started: the medium tier defers to the slice boundary, and the candidate's own verification is complete.
 
 - **L11** — Delivery strategy, decided by the human: `chain_strategy=feature-branch-chain`. The branch carries three stacked features — `feat/npm-release`, `feat/retry-hardening`, `feat/auto-resume` — and the delivery splits them into one chain of feature branches so each pull request stays near the review budget. The slice boundary of this feature is commit `0ac6f74`; the feature closes with this document. No push and no pull request are created by this implementation: both remain human decisions.
+
+- **L12** — Requirement, verbatim: "y porque no lo metiste los comandos dentro del menu interactivo Gentle retry (current: on) para no tener varios comandos y configurar todo por el menu". The command surface was implemented as arguments because this package had no interactive menu to extend: the menu the user was looking at lives in `gentle-shell/extensions/gentle-retry.ts`, the copy this repository was imported from. S15 brings the menu into the package, and the argument forms stay for scripting.
+
+- **L13** — Topology decision, by the human: this package is the single source of truth. The built-in `gentle-shell/extensions/gentle-retry.ts` copy is retired once `gentle-retry` is published to npm, so Gentle Shell users are never left without the feature between the two states. That publication needs the human OTP, and the gentle-shell change belongs to that repository and to its own ODD.
+
+- **L14** — Verification evidence for T4: RED observed first (the two new menu tests failed: "the command without arguments opens the interactive menu" and "the menu offers every action of the command surface"), then GREEN at 79/79 focused tests; full suite 108/108 (exit 0, 3m33s); the build inside the test run covers the type check; `git diff --check` clean. The differential check against the base commit `e5de009` still shows only the known intended differences, and a session without a selector keeps the previous behaviour. The slice boundary of this follow-up is commit `98fc9a9`; the feature's work units are `0ac6f74` (auto-resume) and `98fc9a9` (menu).
