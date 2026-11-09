@@ -44,7 +44,7 @@ Branch: `feat/reconnect-mode` (based on `feat/auto-resume`); delivery: one work-
 | ID | Specs | Route | Status | Commit / Evidence |
 | --- | --- | --- | --- | --- |
 | T1 | S5, S13 | inline (parent) | done | commit `dd9011b`; 13/13 focused tests |
-| T2 | S3, S6, S10, S11, S14 | inline (parent) | pending | reconnect decision module, policy field, shared pending record + tests |
+| T2 | S3, S6, S10, S11, S14 | inline (parent) | done | commit `85f97ce`; 22/22 focused tests, 84/84 in the affected suites |
 | T3 | S4, S7, S8, S9, S15, S17 | inline (parent) | pending | extension wiring, menu, status/doctor + tests |
 | T4 | S16 | inline (parent) | pending | docs + full verification + feature close |
 
@@ -69,3 +69,5 @@ Branch: `feat/reconnect-mode` (based on `feat/auto-resume`); delivery: one work-
 - **L9** — T1 evidence (S5, S13): RED observed first (`ERR_MODULE_NOT_FOUND` for the missing module), then GREEN with 13/13 focused tests (`node --experimental-strip-types --test tests/connectivity.test.ts`). Commit `dd9011b` (`feat: add connectivity watcher for reconnect mode`, 277 inserted lines). The test conventions were mapped by the read-only explorer `mw8jomoh-1-4ueb`: the tests import `../src/*.ts` without the `.js` suffix and register a `registerHooks` resolver that remaps the `.js` specifiers emitted by the sources.
 
 - **L10** — Spec refinement, before the implementation of T1: S13 said "the probe timer never keeps the Pi process alive". The implementation gives the watcher no background timer at all — probes happen only inside an explicit wait, and the polling timer is cleared when the wait ends. A ref'd timer during a wait would be wrong: the pending promise alone does not keep the Node event loop alive, so the process could exit in the middle of a reconnect wait. S13 was rewritten accordingly.
+
+- **L11** — T2 evidence (S3, S6, S10, S11, S14): the reconnect scope (`off` | `session` | `global`) is a policy field with a strict parser — an unknown value makes the file malformed and the feature stays off; the shared pending-resume record (`src/pending-resume.ts`) reads both the new record and the marker written by older auto-resume versions, so neither path continues the same turn twice; `src/retry-classification.ts` gains an additive `classifyPermanentFailure` (quota, auth, bad request) so the reconnect feature leaves the failures that waiting cannot fix alone, without changing the existing transient classification. Commit `85f97ce` (`feat: add reconnect decisions and the shared pending resume record`, 578 inserted lines). RED was observed first (the modules did not exist), then GREEN with 22/22 focused tests and 84/84 in the affected suites.
