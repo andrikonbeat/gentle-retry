@@ -1,14 +1,15 @@
 # gentle-retry
 
-Unlimited retry on HTTP 429 and timeout for [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
+Unlimited retry for transient provider failures in [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
 
 Pi already retries transient failures a few times with its own backoff. When that
 budget runs out, the run stops and the work in progress stops with it. This
 extension keeps the run alive instead: it waits, asks again with the same
 conversation, and repeats for as long as the cause stays transient.
 
-It never retries quota, billing or authentication failures. Waiting does not fix
-those, and pretending otherwise only wastes your time.
+It never retries quota, billing, payment, upgrade, authentication, or
+authorization failures. Waiting does not fix those, and pretending otherwise
+only wastes your time.
 
 ## Install
 
@@ -28,7 +29,8 @@ From a local checkout:
 pi install /path/to/gentle-retry
 ```
 
-Requirements: Pi Coding Agent 1.4.0 or newer, Node 22.19 or newer.
+Requirements: Pi Coding Agent 1.4.0 or newer, Node 22.19 or newer (Node 22 and
+24 are verified in CI).
 
 > `pnpm add -g gentle-retry` does not register an extension with Pi. Use
 > `pi install`, or drop it under `~/.pi/agent/extensions/`.
@@ -40,7 +42,7 @@ should never switch itself on without you asking. The first time it loads in a
 project it says so, once, and names the command that turns it on:
 
 ```
-gentle-retry installed — OFF. Tailored for HTTP 429 and timeouts:
+gentle-retry installed — OFF. Retries transient provider failures such as HTTP 429 and timeouts:
 /gentle:retry enable keeps a run alive instead of stopping.
 ```
 
@@ -49,10 +51,12 @@ never see it.
 
 ## Commands
 
+See [Controls](#controls) for the complete command surface. In short:
+
 ```
-/gentle:retry enable     # keep runs alive through 429 and timeouts
+/gentle:retry enable     # keep runs alive through transient provider failures
 /gentle:retry disable    # back to Pi's own retry budget
-/gentle:retry status     # current state, and which config file decided it
+/gentle:retry status     # effective state, source, limits, and pause state
 ```
 
 ## What it retries
@@ -61,8 +65,17 @@ never see it.
 | --- | --- |
 | HTTP 429, rate limit, throttling | yes |
 | Timeout, deadline exceeded, dropped connection | yes |
-| Quota exhausted, billing, credit or spending limit | no |
+| Connection error | yes |
+| HTTP 502 or Bad Gateway | yes |
+| Stream ended without `finish_reason` | yes |
+| HTTP 400 with `DEGRADED function cannot be invoked` | yes |
+| Any other HTTP 400 | no |
+| Quota exhausted, billing, credit, payment, upgrade or spending limit | no |
 | Authentication, authorization, any other error | no |
+
+When the provider includes usable `Retry-After` guidance (delta-seconds or an
+HTTP date), that value controls the next wait. It is still capped by
+`maxDelayMs`; malformed or unknown guidance falls back to normal backoff.
 
 When a retry happens you see which failure it is waiting on, how long, and how
 many attempts have already failed:
@@ -95,18 +108,61 @@ The safe default is off. Both files are optional, and the project file wins:
 | `baseDelayMs` | `2000` | First wait, in milliseconds. |
 | `maxDelayMs` | `60000` | Ceiling for the growing wait. |
 
-Each attempt multiplies the wait by 1.8 with up to 10% jitter, up to
-`maxDelayMs`. The two delay fields survive `enable` and `disable` cycles.
+Each attempt multiplies the exponential wait by 1.8. Jitter is up to 10% of the
+current exponential delay, and the final wait never exceeds `maxDelayMs`. The
+two delay fields survive `enable` and `disable` cycles.
 
 A missing, unreadable, malformed or unknown-schema file is treated as `off`.
 Typos fail loudly instead of silently changing your retry behaviour.
 
+## Controls
+
+The command surface is intentionally small:
+
+```text
+/gentle:retry enable [--global]
+/gentle:retry disable [--global]
+/gentle:retry status
+/gentle:retry pause
+/gentle:retry resume
+/gentle:retry doctor
+```
+
+Without `--global`, `enable` and `disable` write the project policy. With
+`--global`, they write the policy in the Gentle AI config home. A valid project
+policy still takes precedence over the global one.
+
+`pause` and `resume` affect only the current session. Pausing prevents retries
+without changing the saved policy. `status` shows the effective policy, its
+source, delay bounds, optional safety limits, and pause state. `doctor` adds
+configuration and installation diagnostics; it never reads or prints
+credentials.
+
+Optional safety limits are off by default. Add positive integers to the policy
+file to cap a retry sequence:
+
+```json
+{
+  "schema": "gentle-pi.retry/v1",
+  "policy": "on",
+  "baseDelayMs": 2000,
+  "maxDelayMs": 60000,
+  "maxAttempts": 20,
+  "maxElapsedMs": 900000
+}
+```
+
+`maxAttempts` caps extension retries in one sequence. `maxElapsedMs` caps the
+elapsed retry sequence time. When either limit is reached, gentle-retry reports
+it and stops instead of retrying. Omit either field to keep that dimension
+unlimited.
+
 ## How it works
 
 The extension hooks the moment Pi has exhausted its own retries and is about to
-settle the run. If the last assistant message carries a transient provider error,
-it waits with exponential backoff, then asks Pi for one more provider request
-with the same conversation.
+settle the run. Only an error outcome can be retried. If the last assistant
+message carries a transient provider error, it waits with exponential backoff,
+then asks Pi for one more provider request with the same conversation.
 
 The failed assistant message, and any tool results it produced, are omitted from
 the model context first — the same recovery Pi performs on its own retries — so
@@ -114,7 +170,7 @@ the model never sees a half-written turn. No new user prompt is created and your
 conversation is untouched.
 
 The attempt counter resets on a completed turn, an abort, a non-transient
-failure, or a session change.
+failure, a policy switch, or a session change.
 
 ## Troubleshooting
 

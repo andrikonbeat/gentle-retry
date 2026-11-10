@@ -1,11 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import gentleRetryExtension, { createGentleRetryExtension, resetExtensionState } from "../dist/extension.js";
-import { writeRetryPolicy } from "../dist/retry-policy.js";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+// The focused verification command does not build first. Resolve the source
+// module's emitted-style `.js` imports back to their TypeScript sources.
+registerHooks({
+	resolve(specifier, context, nextResolve) {
+		if (specifier.endsWith(".js") && context.parentURL?.includes("/src/")) {
+			const url = new URL(specifier, context.parentURL);
+			url.pathname = `${url.pathname.slice(0, -3)}.ts`;
+			return { url: url.href, shortCircuit: true };
+		}
+		return nextResolve(specifier, context);
+	},
+});
+
+const extensionModule = await import("../src/extension.ts");
+const policyModule = await import("../src/retry-policy.ts");
+const { default: gentleRetryExtension, createGentleRetryExtension, resetExtensionState } = extensionModule;
+const { writeRetryPolicy } = policyModule;
 
 const USER = (text: string) => ({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
 
@@ -23,6 +40,17 @@ const ASSISTANT_OK = () => ({
 	stopReason: "stop",
 	timestamp: 0,
 });
+
+const REQUESTED_TRANSIENT_MESSAGES = [
+	"Error: Request timed out.",
+	"Error: Connection error.",
+	"Error: Retry failed after 3 attempts: Connection error.",
+	'Error: 429 {"status":429,"title":"Too Many Requests"}',
+	"Error: 502 <html> <head><title>502 Bad Gateway</title></head> <body> <center><h1>502 Bad Gateway</h1></center> <hr><center>openresty</center> </body> </html>",
+	"Error: Retry failed after 1 attempts: 400 {\"status\":400,\"title\":\"Bad Request\",\"detail\":\"Function id 'eb8265c4-e47d-4047-918d-c12746cc2cee': DEGRADED function cannot be invoked\"}",
+	"Error: 400 {\"status\":400,\"title\":\"Bad Request\",\"detail\":\"Function id 'eb8265c4-e47d-4047-918d-c12746cc2cee': DEGRADED function cannot be invoked\"}",
+	"Error: Stream ended without finish_reason",
+];
 
 /**
  * Builds the real `agent_before_settle` shape Pi emits: `context` is a
@@ -150,9 +178,110 @@ test("invalid subcommand shows usage and leaves state unchanged", async () => {
 	const h = harness();
 	await h.commands.get("gentle:retry")!.handler("enable", h.ctx);
 	await h.commands.get("gentle:retry")!.handler("invalid", h.ctx);
-	assert.equal(h.notices.at(-1), "Use /gentle:retry enable|disable|status. State unchanged.");
+	assert.equal(
+		h.notices.at(-1),
+		"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|doctor. State unchanged.",
+	);
 	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
 	assert.match(h.notices.at(-1)!, /ON/);
+	h.cleanup();
+});
+
+test("global enable and disable write the global policy without changing the project", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("enable --global", h.ctx);
+	assert.match(h.notices.at(-1)!, /enabled \(global\)/);
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /ON.*source: global_file/);
+
+	await h.commands.get("gentle:retry")!.handler("disable --global", h.ctx);
+	assert.match(h.notices.at(-1)!, /disabled \(global\)/);
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /OFF.*source: global_file/);
+	h.cleanup();
+});
+
+test("status reports effective source, delay bounds, optional limits, and pause state", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, {
+		baseDelayMs: 1500,
+		maxDelayMs: 45000,
+		maxAttempts: 9,
+		maxElapsedMs: 120000,
+	});
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /ON/);
+	assert.match(h.notices.at(-1)!, /source: project_file/);
+	assert.match(h.notices.at(-1)!, /delays: 1500ms-45000ms/);
+	assert.match(h.notices.at(-1)!, /max attempts: 9/);
+	assert.match(h.notices.at(-1)!, /max elapsed: 120000ms/);
+	assert.match(h.notices.at(-1)!, /paused: no/);
+	h.cleanup();
+});
+
+test("pause is session-scoped, blocks retries, and resume restores them", async () => {
+	const h = harness();
+	await enableFast(h);
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	]);
+
+	await h.commands.get("gentle:retry")!.handler("pause", h.ctx);
+	assert.match(h.notices.at(-1)!, /paused for this session/);
+	assert.equal(await settle(h, event), undefined);
+
+	await h.commands.get("gentle:retry")!.handler("resume", h.ctx);
+	assert.match(h.notices.at(-1)!, /resumed for this session/);
+	assert.equal(((await settle(h, event)) as { continue: boolean }).continue, true);
+
+	await h.commands.get("gentle:retry")!.handler("pause", h.ctx);
+	h.sessionId = "another-session";
+	assert.equal(((await settle(h, event)) as { continue: boolean }).continue, true);
+	h.cleanup();
+});
+
+test("doctor reports actionable configuration and install diagnostics", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, { maxAttempts: 4 });
+	await h.commands.get("gentle:retry")!.handler("doctor", h.ctx);
+	const diagnostic = h.notices.at(-1)!;
+	assert.match(diagnostic, /gentle-retry doctor/);
+	assert.match(diagnostic, /policy: ON/);
+	assert.match(diagnostic, /source: project_file/);
+	assert.match(diagnostic, /max attempts: 4/);
+	assert.match(diagnostic, /project policy: .*retry-policy\.json/);
+	assert.match(diagnostic, /global policy: .*retry-policy\.json/);
+	assert.match(diagnostic, /config home:/);
+	assert.match(diagnostic, /install: pi install npm:gentle-retry/);
+	assert.doesNotMatch(diagnostic, /api[_-]?key|token|password|credential/i);
+	h.cleanup();
+});
+
+test("optional max attempts stops the sequence and reports the limit", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, { baseDelayMs: 1, maxDelayMs: 2, maxAttempts: 1 });
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	]);
+	assert.equal(((await settle(h, event)) as { continue: boolean }).continue, true);
+	assert.equal(await settle(h, event), undefined);
+	assert.match(h.notices.at(-1)!, /maximum attempts reached \(1\)/);
+	h.cleanup();
+});
+
+test("optional max elapsed time stops the sequence and reports the limit", async () => {
+	const h = harness();
+	writeRetryPolicy("on", h.projectDir, { baseDelayMs: 1, maxDelayMs: 2, maxElapsedMs: 1 });
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	]);
+	assert.equal(((await settle(h, event)) as { continue: boolean }).continue, true);
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	assert.equal(await settle(h, event), undefined);
+	assert.match(h.notices.at(-1)!, /maximum elapsed time reached \(1ms\)/);
 	h.cleanup();
 });
 
@@ -187,6 +316,20 @@ test("agent_before_settle retries a timeout", async () => {
 	h.cleanup();
 });
 
+test("agent_before_settle retries every exact requested transient failure", async () => {
+	const h = harness();
+	await enableFast(h);
+	for (const message of REQUESTED_TRANSIENT_MESSAGES) {
+		const event = settleEvent([
+			{ id: "entry-user", messages: [USER("hello")] },
+			{ id: "entry-assistant", messages: [ASSISTANT_ERROR(message)] },
+		]);
+		const result = (await settle(h, event)) as { continue: boolean };
+		assert.equal(result.continue, true, message);
+	}
+	h.cleanup();
+});
+
 test("agent_before_settle never retries quota or auth failures", async () => {
 	const h = harness();
 	await enableFast(h);
@@ -198,6 +341,19 @@ test("agent_before_settle never retries quota or auth failures", async () => {
 		const result = await settle(h, event);
 		assert.equal(result, undefined);
 	}
+	assert.equal(h.notices.length, 0);
+	h.cleanup();
+});
+
+test("agent_before_settle never retries a generic HTTP 400 failure", async () => {
+	const h = harness();
+	await enableFast(h);
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR('400 {"status":400,"title":"Bad Request","detail":"The request timed out"}')] },
+	]);
+	const result = await settle(h, event);
+	assert.equal(result, undefined);
 	assert.equal(h.notices.length, 0);
 	h.cleanup();
 });
@@ -227,6 +383,91 @@ test("agent_before_settle does nothing after a completed turn", async () => {
 	const result = await settle(h, event);
 	assert.equal(result, undefined);
 	assert.equal(h.notices.length, 0);
+	h.cleanup();
+});
+
+test("agent_before_settle never retries a completed boundary with an older failed entry", async () => {
+	const h = harness();
+	await enableFast(h);
+	const event = settleEvent(
+		[
+			{ id: "entry-user", messages: [USER("hello")] },
+			{ id: "entry-old-error", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+			{ id: "entry-success", messages: [ASSISTANT_OK()] },
+		],
+		"completed",
+	);
+	const result = await settle(h, event);
+	assert.equal(result, undefined);
+	assert.equal(h.notices.length, 0);
+	h.cleanup();
+});
+
+test("agent_before_settle never retries an aborted boundary", async () => {
+	const h = harness();
+	await enableFast(h);
+	const event = settleEvent(
+		[
+			{ id: "entry-user", messages: [USER("hello")] },
+			{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+		],
+		"aborted",
+	);
+	const result = await settle(h, event);
+	assert.equal(result, undefined);
+	assert.equal(h.notices.length, 0);
+	h.cleanup();
+});
+
+test("agent_before_settle honors Retry-After and caps it at maxDelayMs", async () => {
+	const h = harness();
+	await enableFast(h);
+	writeRetryPolicy("on", h.projectDir, { baseDelayMs: 1, maxDelayMs: 50 });
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests; Retry-After: 2")] },
+	]);
+	const result = (await settle(h, event)) as { continue: boolean };
+	assert.match(h.notices[0]!, /waiting 50ms/);
+	assert.equal(result.continue, true);
+	h.cleanup();
+});
+
+test("agent_before_settle falls back to normal backoff for malformed Retry-After guidance", async () => {
+	const h = harness();
+	await enableFast(h);
+	writeRetryPolicy("on", h.projectDir, { baseDelayMs: 1, maxDelayMs: 50 });
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests; Retry-After: invalid")] },
+	]);
+	const result = (await settle(h, event)) as { continue: boolean };
+	assert.match(h.notices[0]!, /waiting [12]ms/);
+	assert.equal(result.continue, true);
+	h.cleanup();
+});
+
+test("backoff uses factor 1.8 with proportional jitter and remains capped", async () => {
+	const h = harness();
+	await enableFast(h);
+	writeRetryPolicy("on", h.projectDir, { baseDelayMs: 100, maxDelayMs: 250 });
+	const event = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	]);
+	const originalRandom = Math.random;
+	Math.random = () => 1;
+	try {
+		await settle(h, event);
+		await settle(h, event);
+		await settle(h, event);
+	} finally {
+		Math.random = originalRandom;
+	}
+	const retryNotices = h.notices.filter((notice) => notice.startsWith("Retry "));
+	assert.match(retryNotices[0]!, /waiting 110ms/);
+	assert.match(retryNotices[1]!, /Retry 2.*waiting 198ms/);
+	assert.match(retryNotices[2]!, /Retry 3.*waiting 250ms/);
 	h.cleanup();
 });
 
@@ -265,6 +506,55 @@ test("attempts grow across consecutive settle failures and reset per session", a
 	h.sessionId = "another-session";
 	await settle(h, event);
 	assert.match(h.notices.at(-2)!, /Retry 1/);
+	h.cleanup();
+});
+
+test("attempt counters reset after completed, aborted, non-transient, and policy-switch boundaries", async () => {
+	const h = harness();
+	await enableFast(h);
+	const failed = settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	]);
+	const retryNumbers = () => h.notices
+		.filter((notice) => notice.startsWith("Retry "))
+		.map((notice) => Number(notice.match(/^Retry (\d+)/)?.[1]));
+
+	await settle(h, failed);
+	assert.deepEqual(retryNumbers(), [1]);
+
+	h.notices.length = 0;
+	await settle(h, settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-old-error", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	], "completed"));
+	await settle(h, failed);
+	assert.deepEqual(retryNumbers(), [1]);
+
+	await settle(h, failed);
+	assert.deepEqual(retryNumbers(), [1, 2]);
+
+	h.notices.length = 0;
+	await settle(h, settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("429 Too Many Requests")] },
+	], "aborted"));
+	await settle(h, failed);
+	assert.deepEqual(retryNumbers(), [1]);
+
+	h.notices.length = 0;
+	await settle(h, settleEvent([
+		{ id: "entry-user", messages: [USER("hello")] },
+		{ id: "entry-assistant", messages: [ASSISTANT_ERROR("model not found")] },
+	]));
+	await settle(h, failed);
+	assert.deepEqual(retryNumbers(), [1]);
+
+	h.notices.length = 0;
+	await h.commands.get("gentle:retry")!.handler("disable", h.ctx);
+	await h.commands.get("gentle:retry")!.handler("enable", h.ctx);
+	await settle(h, failed);
+	assert.deepEqual(retryNumbers(), [1]);
 	h.cleanup();
 });
 
