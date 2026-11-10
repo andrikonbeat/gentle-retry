@@ -260,7 +260,16 @@ test("global policy writes are resolved from the global source", () => {
 	assert.equal(policy.maxAttempts, 7);
 });
 
-test("project and global policy writes work across filesystems from the OS temporary directory", () => {
+const crossFilesystemPathsAvailable = statSync(homedir()).dev !== statSync(tmpdir()).dev;
+
+test(
+	"project and global policy writes work across filesystems from the OS temporary directory",
+	{
+		skip: crossFilesystemPathsAvailable
+			? false
+			: "the home directory and the OS temporary directory share one filesystem, so the cross-device write cannot be reproduced here",
+	},
+	() => {
 	const configHome = scratch("gentle-retry-config-", homedir());
 	const projectDir = scratch("gentle-retry-project-", homedir());
 	const globalProjectDir = scratch("gentle-retry-global-project-", homedir());
