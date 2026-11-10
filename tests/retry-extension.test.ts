@@ -21,8 +21,10 @@ registerHooks({
 
 const extensionModule = await import("../src/extension.ts");
 const policyModule = await import("../src/retry-policy.ts");
+const autoResumeModule = await import("../src/auto-resume.ts");
 const { default: gentleRetryExtension, createGentleRetryExtension, resetExtensionState } = extensionModule;
 const { writeRetryPolicy } = policyModule;
+const { AUTO_RESUME_PROMPT } = autoResumeModule;
 
 const USER = (text: string) => ({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
 
@@ -86,13 +88,15 @@ function harness() {
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
 	const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => unknown>>();
 	const notices: string[] = [];
+	const sent: string[] = [];
 	let sessionId = "test-session";
+	let branch: unknown[] = [];
 	const controller = new AbortController();
 	const ctx = {
 		cwd: projectDir,
 		mode: "tui",
 		hasUI: true,
-		sessionManager: { getSessionId: () => sessionId },
+		sessionManager: { getSessionId: () => sessionId, getBranch: () => branch },
 		ui: {
 			notify: (text: string) => notices.push(text),
 			setStatus: () => {},
@@ -111,6 +115,9 @@ function harness() {
 		registerTool: () => {},
 		registerMessageRenderer() {},
 		registerFlag() {},
+		sendUserMessage: (text: string) => {
+			sent.push(text);
+		},
 		events: { emit() {}, on: () => () => {} },
 		getActiveTools: () => [],
 		getSettings: () => ({}),
@@ -126,9 +133,12 @@ function harness() {
 		ctx,
 		commands,
 		notices,
+		sent,
 		handlers,
 		get sessionId() { return sessionId; },
 		set sessionId(value: string) { sessionId = value; },
+		get branch() { return branch; },
+		set branch(value: unknown[]) { branch = value; },
 		configHome,
 		projectDir,
 		controller,
@@ -180,7 +190,7 @@ test("invalid subcommand shows usage and leaves state unchanged", async () => {
 	await h.commands.get("gentle:retry")!.handler("invalid", h.ctx);
 	assert.equal(
 		h.notices.at(-1),
-		"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|doctor. State unchanged.",
+		"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|auto-resume <on|off> [--global]|doctor. State unchanged.",
 	);
 	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
 	assert.match(h.notices.at(-1)!, /ON/);
@@ -610,5 +620,149 @@ test("session_start stays silent when retry is already enabled", async () => {
 	h.notices.length = 0;
 	await startSession(h);
 	assert.equal(h.notices.length, 0);
+	h.cleanup();
+});
+
+async function startSessionWithReason(
+	h: ReturnType<typeof harness>,
+	reason: string,
+	ctx: ExtensionContext = h.ctx,
+) {
+	for (const fn of h.handlers.get("session_start") ?? []) await fn({ type: "session_start", reason }, ctx);
+}
+
+test("the status and the doctor report the auto-resume state", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /auto resume: OFF/);
+	await h.commands.get("gentle:retry")!.handler("doctor", h.ctx);
+	assert.match(h.notices.at(-1)!, /auto resume: OFF/);
+	h.cleanup();
+});
+
+test("the auto-resume command persists the flag in the chosen scope only", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("auto-resume on", h.ctx);
+	assert.match(h.notices.at(-1)!, /Auto-resume enabled \(project\)/);
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /auto resume: ON/);
+	await h.commands.get("gentle:retry")!.handler("auto-resume off --global", h.ctx);
+	assert.match(h.notices.at(-1)!, /Auto-resume disabled \(global\)/);
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /auto resume: ON/);
+	h.cleanup();
+});
+
+test("an interrupted turn is continued once when auto-resume is enabled", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("auto-resume on", h.ctx);
+	h.branch = [{ id: "entry-user", type: "message", message: USER("keep going") }];
+	await startSessionWithReason(h, "resume");
+	assert.equal(h.sent.length, 1);
+	assert.equal(h.sent[0], AUTO_RESUME_PROMPT);
+	h.cleanup();
+});
+
+test("auto-resume does nothing while it is disabled", async () => {
+	const h = harness();
+	h.branch = [{ id: "entry-user", type: "message", message: USER("keep going") }];
+	await startSessionWithReason(h, "resume");
+	assert.equal(h.sent.length, 0);
+	h.cleanup();
+});
+
+test("auto-resume ignores completed, aborted, and failed turns", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("auto-resume on", h.ctx);
+	for (const stopReason of ["stop", "aborted", "error"]) {
+		h.branch = [
+			{ id: "entry-user", type: "message", message: USER("keep going") },
+			{
+				id: "entry-assistant",
+				type: "message",
+				message: { role: "assistant", content: [], stopReason, timestamp: 0 },
+			},
+		];
+		await startSessionWithReason(h, "resume");
+	}
+	assert.equal(h.sent.length, 0);
+	h.cleanup();
+});
+
+test("auto-resume never continues the same turn twice", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("auto-resume on", h.ctx);
+	h.branch = [{ id: "entry-user", type: "message", message: USER("keep going") }];
+	await startSessionWithReason(h, "resume");
+	assert.equal(h.sent.length, 1);
+	h.branch = [
+		{ id: "entry-user", type: "message", message: USER("keep going") },
+		{ id: "entry-continuation", type: "message", message: USER(AUTO_RESUME_PROMPT) },
+	];
+	await startSessionWithReason(h, "resume");
+	assert.equal(h.sent.length, 1);
+	h.cleanup();
+});
+
+test("auto-resume only runs for resumed sessions in an interactive terminal", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("auto-resume on", h.ctx);
+	h.branch = [{ id: "entry-user", type: "message", message: USER("keep going") }];
+	await startSessionWithReason(h, "new");
+	await startSessionWithReason(h, "fork");
+	await startSessionWithReason(h, "resume", { ...h.ctx, mode: "rpc" } as unknown as ExtensionContext);
+	assert.equal(h.sent.length, 0);
+	h.cleanup();
+});
+
+type Selector = (title: string, options: string[]) => Promise<string | undefined>;
+
+function withSelector(h: ReturnType<typeof harness>, select: Selector) {
+	const calls: Array<{ title: string; options: string[] }> = [];
+	(h.ctx.ui as unknown as { select: Selector }).select = async (title: string, options: string[]) => {
+		calls.push({ title, options });
+		return select(title, options);
+	};
+	return calls;
+}
+
+test("the command without arguments opens the interactive menu", async () => {
+	const h = harness();
+	const calls = withSelector(h, (_title, options) => options.find((option) => option.startsWith("Auto-resume")));
+	await h.commands.get("gentle:retry")!.handler("", h.ctx);
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0]!.title, "Gentle retry (current: off)");
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /auto resume: ON/);
+	h.cleanup();
+});
+
+test("the menu offers every action of the command surface", async () => {
+	const h = harness();
+	const calls = withSelector(h, () => undefined);
+	await h.commands.get("gentle:retry")!.handler("", h.ctx);
+	const options = calls[0]!.options;
+	for (const expected of [
+		"Enable for this project",
+		"Disable for this project",
+		"Enable for every project",
+		"Disable for every project",
+		"Pause retrying in this session",
+		"Auto-resume: on",
+		"Show status",
+		"Show diagnostics",
+	]) {
+		assert.ok(options.includes(expected), `the menu must offer "${expected}"`);
+	}
+	h.cleanup();
+});
+
+test("cancelling the menu changes nothing", async () => {
+	const h = harness();
+	withSelector(h, () => undefined);
+	await h.commands.get("gentle:retry")!.handler("", h.ctx);
+	await h.commands.get("gentle:retry")!.handler("status", h.ctx);
+	assert.match(h.notices.at(-1)!, /Transient provider retry OFF/);
+	assert.match(h.notices.at(-1)!, /auto resume: OFF/);
 	h.cleanup();
 });
