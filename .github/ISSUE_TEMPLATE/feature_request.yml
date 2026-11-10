@@ -1,0 +1,46 @@
+name: Feature request
+description: Propose a change to what gentle-retry does.
+title: "[Feature]: "
+labels: ["type:feature", "status:needs-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tell us the situation you were in and what you expected the extension to
+        do. A concrete failure or workflow is worth more than a feature name.
+  - type: textarea
+    id: situation
+    attributes:
+      label: What were you doing?
+      description: The session, the command, and the provider failure if there was one.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should happen instead?
+      description: The behavior you want, and the command or setting that should express it.
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - "This project only"
+        - "Every project on this machine"
+        - "This session only"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Workarounds you use today, or other extensions that cover this.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: This is not covered by an existing issue
+          required: true

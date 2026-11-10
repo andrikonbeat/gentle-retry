@@ -1,0 +1,72 @@
+name: Bug report
+description: Something in gentle-retry does not behave as documented.
+title: "[Bug]: "
+labels: ["type:bug", "status:needs-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The version, the exact command, and the exact
+        text you saw are what make it reproducible.
+  - type: input
+    id: version
+    attributes:
+      label: gentle-retry version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: pi-version
+    attributes:
+      label: Pi Coding Agent version
+      placeholder: "1.4.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: command
+    attributes:
+      label: What did you run?
+      options:
+        - "/gentle:retry (the menu)"
+        - "/gentle:retry enable"
+        - "/gentle:retry enable --global"
+        - "/gentle:retry disable"
+        - "/gentle:retry disable --global"
+        - "/gentle:retry status"
+        - "/gentle:retry pause"
+        - "/gentle:retry resume"
+        - "/gentle:retry auto-resume on"
+        - "/gentle:retry auto-resume off"
+        - "/gentle:retry auto-resume on --global"
+        - "/gentle:retry auto-resume off --global"
+        - "/gentle:retry reconnect global"
+        - "/gentle:retry reconnect session"
+        - "/gentle:retry reconnect off"
+        - "/gentle:retry reconnect enable"
+        - "/gentle:retry reconnect disable"
+        - "/gentle:retry doctor"
+        - "Nothing — the extension acted on its own"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: What the documentation says, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The notification text, the doctor line, or the provider error as it was shown.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: The behavior reproduces with the latest published version
+          required: true
+        - label: The behavior reproduces with the latest commit on main
+          required: false

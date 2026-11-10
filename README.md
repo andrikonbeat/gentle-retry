@@ -1,5 +1,10 @@
 # gentle-retry
 
+[![CI](https://github.com/andrikonbeat/gentle-retry/actions/workflows/ci.yml/badge.svg)](https://github.com/andrikonbeat/gentle-retry/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/gentle-retry.svg)](https://www.npmjs.com/package/gentle-retry)
+[![npm downloads](https://img.shields.io/npm/dm/gentle-retry.svg)](https://www.npmjs.com/package/gentle-retry)
+[![license](https://img.shields.io/npm/l/gentle-retry.svg)](https://github.com/andrikonbeat/gentle-retry/blob/main/LICENSE)
+
 Unlimited retry for transient provider failures in [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
 
 Pi already retries transient failures a few times with its own backoff. When that
@@ -248,6 +253,15 @@ Most common surprises:
 - Installed but silent → it is off; run `/gentle:retry enable`.
 - Still stopping on a failure → it was classified as non-transient, on purpose.
 - Project file ignored → it is malformed; `/gentle:retry status` says `malformed`.
+
+## Contributing and security
+
+Pull requests are welcome. Open an issue first, and read
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development commands, the branch
+naming, and the pull request contract.
+
+To report a security problem, do not open a public issue — see
+[SECURITY.md](SECURITY.md).
 
 ## Development
 
