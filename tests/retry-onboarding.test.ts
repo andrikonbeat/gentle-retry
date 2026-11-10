@@ -102,7 +102,16 @@ test("a malformed marker does not stop the marker from being rewritten", () => {
 	assert.equal(readOnboardingMarker(configHome), "present");
 });
 
-test("the onboarding marker write works across filesystems from the OS temporary directory", () => {
+const crossFilesystemPathsAvailable = statSync(homedir()).dev !== statSync(tmpdir()).dev;
+
+test(
+	"the onboarding marker write works across filesystems from the OS temporary directory",
+	{
+		skip: crossFilesystemPathsAvailable
+			? false
+			: "the home directory and the OS temporary directory share one filesystem, so the cross-device write cannot be reproduced here",
+	},
+	() => {
 	const configHome = scratch("gentle-retry-onboarding-home-", homedir());
 	const operatingSystemTemp = scratch("gentle-retry-onboarding-os-temp-", tmpdir());
 	assert.notEqual(
