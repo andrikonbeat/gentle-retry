@@ -63,6 +63,23 @@ export function parseRetryAfterMs(errorMessage: string, now = Date.now()): numbe
 	return Math.max(0, timestamp - now);
 }
 
+export type PermanentFailureKind = "quota" | "auth" | "bad_request";
+
+/**
+ * Failures that waiting cannot fix.
+ *
+ * The reconnect feature uses this to leave billing, authentication, and bad
+ * request failures alone: no amount of connectivity brings the quota back.
+ * A degraded function stays out of this list because it is retryable.
+ */
+export function classifyPermanentFailure(errorMessage: string): PermanentFailureKind | undefined {
+	if (QUOTA_PATTERN.test(errorMessage)) return "quota";
+	if (AUTH_PATTERN.test(errorMessage)) return "auth";
+	if (DEGRADED_FUNCTION_PATTERN.test(errorMessage)) return undefined;
+	if (HTTP_400_PATTERN.test(errorMessage)) return "bad_request";
+	return undefined;
+}
+
 export function classifyTransientFailure(errorMessage: string): TransientFailureKind | undefined {
 	if (QUOTA_PATTERN.test(errorMessage)) return undefined;
 	if (AUTH_PATTERN.test(errorMessage)) return undefined;
