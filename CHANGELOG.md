@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Global policy controls, session-scoped pause and resume, detailed status, and
   installation diagnostics through `/gentle:retry doctor`.
 - Optional `maxAttempts` and `maxElapsedMs` safety limits, disabled by default.
+- Opt-in `autoResume` switch: with `/gentle:retry auto-resume on`, reopening a
+  session whose last turn was interrupted continues that turn with a single
+  continuation message. Disabled by default.
+- An interactive menu: `/gentle:retry` without arguments opens
+  `Gentle retry (current: on)` with every action, so the whole surface is
+  configurable from one place.
 
 ### Changed
 

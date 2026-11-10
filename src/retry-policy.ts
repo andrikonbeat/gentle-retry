@@ -17,6 +17,7 @@ export interface RetryPolicyFile {
 	maxDelayMs?: number;
 	maxAttempts?: number;
 	maxElapsedMs?: number;
+	autoResume?: boolean;
 }
 
 type ReadResult = RetryPolicyFile | { malformed: true } | null;
@@ -27,6 +28,7 @@ export interface ResolvedRetryPolicy {
 	maxDelayMs: number;
 	maxAttempts?: number;
 	maxElapsedMs?: number;
+	autoResume: boolean;
 	source: "project_file" | "global_file" | "default";
 	malformed?: true;
 	malformedSource?: "project_file" | "global_file";
@@ -73,7 +75,7 @@ function parseRetryPolicyFile(content: string): RetryPolicyFile | null {
 	) {
 		return null;
 	}
-	const { schema, policy, baseDelayMs, maxDelayMs, maxAttempts, maxElapsedMs, ...rest } = parsed as Record<string, unknown>;
+	const { schema, policy, baseDelayMs, maxDelayMs, maxAttempts, maxElapsedMs, autoResume, ...rest } = parsed as Record<string, unknown>;
 	if (schema !== RETRY_POLICY_SCHEMA) return null;
 	if (policy !== "on" && policy !== "off") return null;
 	if (Object.keys(rest).length > 0) return null;
@@ -81,6 +83,7 @@ function parseRetryPolicyFile(content: string): RetryPolicyFile | null {
 	const md = maxDelayMs as number | undefined;
 	const ma = maxAttempts as number | undefined;
 	const me = maxElapsedMs as number | undefined;
+	const ar = autoResume as boolean | undefined;
 	const effectiveBaseDelayMs = bd ?? RETRY_POLICY_DEFAULT_BASE_DELAY_MS;
 	const effectiveMaxDelayMs = md ?? RETRY_POLICY_DEFAULT_MAX_DELAY_MS;
 	if (!Number.isInteger(effectiveBaseDelayMs) || effectiveBaseDelayMs <= 0) return null;
@@ -88,6 +91,7 @@ function parseRetryPolicyFile(content: string): RetryPolicyFile | null {
 	if (effectiveMaxDelayMs < effectiveBaseDelayMs) return null;
 	if (ma !== undefined && (!Number.isInteger(ma) || ma <= 0)) return null;
 	if (me !== undefined && (!Number.isInteger(me) || me <= 0)) return null;
+	if (ar !== undefined && typeof ar !== "boolean") return null;
 	return {
 		schema,
 		policy: policy as RetryPolicyValue,
@@ -95,6 +99,7 @@ function parseRetryPolicyFile(content: string): RetryPolicyFile | null {
 		maxDelayMs: md,
 		maxAttempts: ma,
 		maxElapsedMs: me,
+		autoResume: ar,
 	};
 }
 
@@ -120,6 +125,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 			maxDelayMs: projectFile.maxDelayMs ?? RETRY_POLICY_DEFAULT_MAX_DELAY_MS,
 			maxAttempts: projectFile.maxAttempts,
 			maxElapsedMs: projectFile.maxElapsedMs,
+			autoResume: projectFile.autoResume ?? false,
 			source: "project_file",
 		};
 	}
@@ -128,6 +134,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 			policy: "off",
 			baseDelayMs: RETRY_POLICY_DEFAULT_BASE_DELAY_MS,
 			maxDelayMs: RETRY_POLICY_DEFAULT_MAX_DELAY_MS,
+			autoResume: false,
 			source: "default",
 			malformed: true,
 			malformedSource: "project_file",
@@ -142,6 +149,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 			maxDelayMs: globalFile.maxDelayMs ?? RETRY_POLICY_DEFAULT_MAX_DELAY_MS,
 			maxAttempts: globalFile.maxAttempts,
 			maxElapsedMs: globalFile.maxElapsedMs,
+			autoResume: globalFile.autoResume ?? false,
 			source: "global_file",
 		};
 	}
@@ -150,6 +158,7 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 			policy: "off",
 			baseDelayMs: RETRY_POLICY_DEFAULT_BASE_DELAY_MS,
 			maxDelayMs: RETRY_POLICY_DEFAULT_MAX_DELAY_MS,
+			autoResume: false,
 			source: "default",
 			malformed: true,
 			malformedSource: "global_file",
@@ -159,8 +168,21 @@ export function resolveRetryPolicy(cwd: string): ResolvedRetryPolicy {
 		policy: "off",
 		baseDelayMs: RETRY_POLICY_DEFAULT_BASE_DELAY_MS,
 		maxDelayMs: RETRY_POLICY_DEFAULT_MAX_DELAY_MS,
+		autoResume: false,
 		source: "default",
 	};
+}
+
+/**
+ * The policy value stored in one scope, without resolving the other scope.
+ * The auto-resume command needs it so it can change the flag in the global
+ * file without carrying the project file's on/off state over.
+ */
+export function readRetryPolicyValue(cwd: string, options?: { global?: boolean }): RetryPolicyValue {
+	const targetPath = options?.global ? globalRetryPolicyPath() : projectRetryPolicyPath(cwd);
+	const file = readPolicyFile(targetPath);
+	if (!file || "malformed" in file) return "off";
+	return file.policy;
 }
 
 export function writeRetryPolicy(
@@ -171,6 +193,7 @@ export function writeRetryPolicy(
 		maxDelayMs?: number;
 		maxAttempts?: number;
 		maxElapsedMs?: number;
+		autoResume?: boolean;
 		global?: boolean;
 	},
 ): void {
@@ -182,16 +205,19 @@ export function writeRetryPolicy(
 	let maxDelayMs = RETRY_POLICY_DEFAULT_MAX_DELAY_MS;
 	let maxAttempts: number | undefined;
 	let maxElapsedMs: number | undefined;
+	let autoResume: boolean | undefined;
 	if (current && !("malformed" in current)) {
 		baseDelayMs = current.baseDelayMs ?? RETRY_POLICY_DEFAULT_BASE_DELAY_MS;
 		maxDelayMs = current.maxDelayMs ?? RETRY_POLICY_DEFAULT_MAX_DELAY_MS;
 		maxAttempts = current.maxAttempts;
 		maxElapsedMs = current.maxElapsedMs;
+		autoResume = current.autoResume;
 	}
 	if (options?.baseDelayMs !== undefined) baseDelayMs = options.baseDelayMs;
 	if (options?.maxDelayMs !== undefined) maxDelayMs = options.maxDelayMs;
 	if (options?.maxAttempts !== undefined) maxAttempts = options.maxAttempts;
 	if (options?.maxElapsedMs !== undefined) maxElapsedMs = options.maxElapsedMs;
+	if (options?.autoResume !== undefined) autoResume = options.autoResume;
 	const content = JSON.stringify({
 		schema: RETRY_POLICY_SCHEMA,
 		policy,
@@ -199,6 +225,7 @@ export function writeRetryPolicy(
 		maxDelayMs,
 		...(maxAttempts !== undefined ? { maxAttempts } : {}),
 		...(maxElapsedMs !== undefined ? { maxElapsedMs } : {}),
+		...(autoResume !== undefined ? { autoResume } : {}),
 	}, null, "\t");
 	atomicWriteFileSync(targetPath, content, { mode: 0o600 });
 }

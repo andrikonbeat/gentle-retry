@@ -5,8 +5,10 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	ProjectedSessionEntry,
+	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
-import { gentlePiConfigHome, resolveRetryPolicy, retryPolicyPaths, writeRetryPolicy } from "./retry-policy.js";
+import { gentlePiConfigHome, readRetryPolicyValue, resolveRetryPolicy, retryPolicyPaths, writeRetryPolicy } from "./retry-policy.js";
+import { AUTO_RESUME_PROMPT, decideAutoResume, readAutoResumeMarker, writeAutoResumeMarker } from "./auto-resume.js";
 import { classifyTransientFailure, parseRetryAfterMs, TRANSIENT_FAILURE_LABEL } from "./retry-classification.js";
 import {
 	ONBOARDING_MESSAGE,
@@ -55,6 +57,7 @@ function policyStatus(policy: ReturnType<typeof resolveRetryPolicy>, paused: boo
 		`max attempts: ${formatLimit(policy.maxAttempts, "")}`,
 		`max elapsed: ${formatLimit(policy.maxElapsedMs, "ms")}`,
 		`paused: ${paused ? "yes" : "no"}`,
+		`auto resume: ${policy.autoResume ? ON_TEXT : OFF_TEXT}`,
 	].join(" | ");
 }
 
@@ -159,8 +162,47 @@ function omissionDrafts(
 	return drafts;
 }
 
+/**
+ * The interactive menu: one entry per action of the command surface.
+ *
+ * The chosen entry is handed back to the command handler, so the menu and
+ * the argument forms run exactly the same code.
+ */
+async function openRetryMenu(
+	ctx: ExtensionContext,
+	run: (args: string, ctx: ExtensionContext) => Promise<void>,
+): Promise<void> {
+	const policy = resolveRetryPolicy(ctx.cwd);
+	const paused = isPaused(ctx);
+	const entries = [
+		{ label: "Enable for this project", action: "enable" },
+		{ label: "Disable for this project", action: "disable" },
+		{ label: "Enable for every project", action: "enable --global" },
+		{ label: "Disable for every project", action: "disable --global" },
+		{
+			label: paused ? "Resume retrying in this session" : "Pause retrying in this session",
+			action: paused ? "resume" : "pause",
+		},
+		{
+			label: policy.autoResume ? "Auto-resume: off" : "Auto-resume: on",
+			action: `auto-resume ${policy.autoResume ? "off" : "on"}`,
+		},
+		{ label: "Show status", action: "status" },
+		{ label: "Show diagnostics", action: "doctor" },
+	];
+	const selected = await ctx.ui.select(`Gentle retry (current: ${policy.policy})`, entries.map((entry) => entry.label));
+	if (selected === undefined) return;
+	const chosen = entries.find((entry) => entry.label === selected);
+	if (!chosen) return;
+	await run(chosen.action, ctx);
+}
+
 function createRetryCommand() {
 	return async function retryCommand(args: string, ctx: ExtensionContext): Promise<void> {
+		if (!args.trim() && ctx.hasUI && typeof ctx.ui.select === "function") {
+			await openRetryMenu(ctx, retryCommand);
+			return;
+		}
 		const trimmed = args.trim().toLowerCase();
 		const policy = resolveRetryPolicy(ctx.cwd);
 		const paused = isPaused(ctx);
@@ -194,6 +236,20 @@ function createRetryCommand() {
 			ctx.ui.notify(`${RETRY_STATUS_TEXT} resumed for this session`);
 			return;
 		}
+		if (
+			trimmed === "auto-resume on" ||
+			trimmed === "auto-resume on --global" ||
+			trimmed === "auto-resume off" ||
+			trimmed === "auto-resume off --global"
+		) {
+			const global = trimmed.endsWith(" --global");
+			const enabled = trimmed.startsWith("auto-resume on");
+			// The flag changes in one scope only; that scope keeps its own on/off state.
+			const current = readRetryPolicyValue(ctx.cwd, { global });
+			writeRetryPolicy(current, ctx.cwd, { global, autoResume: enabled });
+			ctx.ui.notify(`Auto-resume ${enabled ? "enabled" : "disabled"} (${global ? "global" : "project"})`);
+			return;
+		}
 		if (trimmed === "doctor") {
 			const configHome = gentlePiConfigHome();
 			const paths = retryPolicyPaths(ctx.cwd);
@@ -204,6 +260,7 @@ function createRetryCommand() {
 				`max attempts: ${formatLimit(policy.maxAttempts, "")}`,
 				`max elapsed: ${formatLimit(policy.maxElapsedMs, "ms")}`,
 				`paused: ${paused ? "yes" : "no"}`,
+				`auto resume: ${policy.autoResume ? ON_TEXT : OFF_TEXT}`,
 				`project policy: ${paths.project}`,
 				`global policy: ${paths.global}`,
 				`config home: ${configHome}`,
@@ -213,7 +270,7 @@ function createRetryCommand() {
 			return;
 		}
 		ctx.ui.notify(
-			"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|doctor. State unchanged.",
+			"Use /gentle:retry enable [--global]|disable [--global]|status|pause|resume|auto-resume <on|off> [--global]|doctor. State unchanged.",
 		);
 	};
 }
@@ -241,6 +298,53 @@ function announceOnboarding(ctx: ExtensionContext): void {
 		// A read-only home must not break the session; the worst case is one more
 		// greeting, which is better than a failed start.
 	}
+}
+
+/**
+ * Continues the last turn when the session was reopened after an interruption.
+ *
+ * The continuation is a normal user message: Pi runs it like any other prompt.
+ * The durable marker is written after the message is handed over, so a crash
+ * in between leaves the turn resumable, while a continuation that already
+ * reached the transcript is recognized by its own text and never repeated.
+ */
+function autoResumeOnSessionStart(event: SessionStartEvent, ctx: ExtensionContext, pi: ExtensionAPI): void {
+	const policy = resolveRetryPolicy(ctx.cwd);
+	if (!policy.autoResume || policy.malformed) return;
+	const branch = ctx.sessionManager?.getBranch?.() ?? [];
+	const sessionId = ctx.sessionManager?.getSessionId?.() ?? "default";
+	let configHome: string;
+	try {
+		configHome = gentlePiConfigHome();
+	} catch {
+		return;
+	}
+	const decision = decideAutoResume({
+		autoResumeEnabled: policy.autoResume,
+		policyMalformed: policy.malformed === true,
+		sessionMode: ctx.mode,
+		startReason: event?.reason,
+		entries: branch,
+		marker: readAutoResumeMarker(configHome),
+		sessionId,
+	});
+	if (!decision.resume) return;
+	try {
+		pi.sendUserMessage(decision.prompt);
+	} catch {
+		// A session that cannot take the message yet leaves the turn resumable.
+		return;
+	}
+	writeAutoResumeMarker(configHome, { sessionId, entryId: decision.entryId });
+	ctx.ui?.notify?.("Resuming the interrupted turn…", "info");
+}
+
+/**
+ * Introduces the extension once per install and continues an interrupted turn.
+ */
+function sessionStart(event: SessionStartEvent, ctx: ExtensionContext, pi: ExtensionAPI): void {
+	announceOnboarding(ctx);
+	autoResumeOnSessionStart(event, ctx, pi);
 }
 
 /**
@@ -333,7 +437,7 @@ export function createGentleRetryExtension(): (pi: ExtensionAPI) => void {
 			description: "Control and diagnose transient provider retry",
 			handler: createRetryCommand(),
 		});
-		guarded.on("session_start", (_event, ctx) => announceOnboarding(ctx));
+		guarded.on("session_start", (event, ctx) => sessionStart(event, ctx, pi));
 		guarded.on("agent_before_settle", agentBeforeSettleHandler);
 	};
 }
