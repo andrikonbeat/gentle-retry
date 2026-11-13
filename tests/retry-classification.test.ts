@@ -40,6 +40,7 @@ const NON_TRANSIENT: string[] = [
 	"invalid api key",
 	"model not found",
 	"context length exceeded",
+	"Warning: Context usage is at 106% (≥ 90%); consider compacting before the next turn.",
 	"unknown error",
 	"",
 ];
@@ -54,6 +55,9 @@ const REQUESTED_TRANSIENT_CASES: Array<[string, TransientFailureKind]> = [
 	["Error: 400 {\"status\":400,\"title\":\"Bad Request\",\"detail\":\"Function id 'eb8265c4-e47d-4047-918d-c12746cc2cee': DEGRADED function cannot be invoked\"}", "degraded_function"],
 	["Error: Stream ended without finish_reason", "incomplete_stream"],
 	['Error: 503: {"message":"content safety screening is temporarily unavailable"}', "content_safety_screening"],
+	["Error: Connection error.: getaddrinfo ENOTFOUND integrate.api.nvidia.com", "connection"],
+	["Error: Request timed out.: Connect Timeout Error (attempted addresses: 99.83.136.103:443, 75.2.113.119:443, timeout: 10000ms) (UND_ERR_CONNECT_TIMEOUT)", "timeout"],
+	["Error: terminated: read ETIMEDOUT", "timeout"],
 ];
 
 const BARE_TRANSIENT_CASES: Array<[string, TransientFailureKind]> = [
@@ -64,6 +68,9 @@ const BARE_TRANSIENT_CASES: Array<[string, TransientFailureKind]> = [
 	["400 {\"status\":400,\"title\":\"Bad Request\",\"detail\":\"Function id 'eb8265c4-e47d-4047-918d-c12746cc2cee': DEGRADED function cannot be invoked\"}", "degraded_function"],
 	["Stream ended without finish_reason", "incomplete_stream"],
 	['503: {"message":"content safety screening is temporarily unavailable"}', "content_safety_screening"],
+	["getaddrinfo ENOTFOUND integrate.api.nvidia.com", "connection"],
+	["UND_ERR_CONNECT_TIMEOUT", "timeout"],
+	["terminated: read ETIMEDOUT", "timeout"],
 ];
 
 test("classifies HTTP 429 and rate limit variants as rate_limit", () => {

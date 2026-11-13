@@ -23,9 +23,9 @@ const AUTH_PATTERN = /\b(authentication|authorization|unauthorized|forbidden|inv
 
 const RATE_LIMIT_PATTERN = /\b(429\b|too[_\s-]?many[_\s-]?requests|rate[_\s-]?limit|rate[_\s-]?limited|throttle[d]?)\b/i;
 
-const TIMEOUT_PATTERN = /\b(timed[_\s-]?out|timeout|ETIMEDOUT|deadline[_\s-]?exceeded|connection[_\s-]?timeout|request[_\s-]?timeout)\b/i;
+const TIMEOUT_PATTERN = /\b(timed[_\s-]?out|timeout|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|deadline[_\s-]?exceeded|connection[_\s-]?timeout|request[_\s-]?timeout)\b/i;
 
-const CONNECTION_PATTERN = /\b(connection[_\s-]?error|connection[_\s-]?(?:reset|closed|aborted|refused)|dropped[_\s-]?connection|ECONNRESET|ECONNREFUSED|ECONNABORTED|EPIPE|socket[_\s-]?hang[_\s-]?up)\b/i;
+const CONNECTION_PATTERN = /\b(connection[_\s-]?error|connection[_\s-]?(?:reset|closed|aborted|refused)|dropped[_\s-]?connection|ECONNRESET|ECONNREFUSED|ECONNABORTED|EPIPE|ENOTFOUND|EAI_AGAIN|socket[_\s-]?hang[_\s-]?up)\b/i;
 
 const GATEWAY_PATTERN = /\b(502\b|bad[_\s-]?gateway|gateway[_\s-]?timeout)\b/i;
 

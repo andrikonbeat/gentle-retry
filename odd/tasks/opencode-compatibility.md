@@ -19,20 +19,31 @@ Branch: `feat/opencode-compatibility`; delivery: ordered work-unit commits on th
   - "Error: 503: {"message":"content safety screening is temporarily unavailable"}"
   - "Error: 503: {"message":"content safety screening is temporarily unavailable"}"
   - "Error: Retry failed after 3 attempts: 503: {"message":"content safety screening is temporarily unavailable"}"
+  - "Error: Connection error.: getaddrinfo ENOTFOUND integrate.api.nvidia.com"
+  - "Warning: Context usage is at 106% (≥ 90%); consider compacting before the next turn."
+  - "Error: Connection error.: getaddrinfo ENOTFOUND integrate.api.nvidia.com"
+  - "Error: Request timed out.: Connect Timeout Error (attempted addresses: 99.83.136.103:443, 75.2.113.119:443, timeout: 10000ms) (UND_ERR_CONNECT_TIMEOUT)"
+  - "Error: terminated: read ETIMEDOUT"
 
 - **S3** — Verification request, verbatim: "Luego que tengas la compatibilidad lista para todos esos errores vas a hacer prubeas controladas para asegurarte que gentle-retry funcione como debe funcionar asegurate de probar todas las funcionalidades que trae-"
 
 - **S4** — OpenCode compatibility constraint, verbatim: "Quiero compatibilidad total con Opencode ten en cuenta que ya opencode integra la continuacion automatica de la sesion despues de reiniciar la termina."
 
+- **S5** — Pi restart continuation request, verbatim: "Aveces se me cierra la terminal y cuando la vielvo a abrir la conversacion no continua automaticamente como deberia hacer, revisa eso y haz que cuando abra mi terminal si lo tengo configurado en el menu continuen las conversaciones en gentle-shell (pi) por donde mismo se crean, como si sucede en Opencode no se que mecanismo vas a usar si enviarle un prompt u otra cosa."
+
+- **S6** — Retry-chat hygiene request, verbatim: "Cuando gentle-retry lleva bastante tiempo reintentando se llena la conversasion de errores como podemos mantener ej funcionamiento pero sin que los errores se muestren como parte del chat ?"
+
 ## Tasks
 
 | ID | Specs | Route | Status | Commit / Evidence |
 | --- | --- | --- | --- | --- |
-| T1 | S2 | inline (parent) | done | commit `48f9b6f`; RED 8/10, GREEN 10/10, build exit 0 |
+| T1 | S2 | inline (parent) | done | commits `48f9b6f` + pending: DNS/timeout/context-pressure coverage green |
 | T2 | S1, S4 | delegated writer, then inline fallback | done | commits `082cbcc`, `349bc33`; 15/15 OpenCode tests, 65/65 focused tests, build exit 0 |
-| T3 | S1, S4 | delegated writer, then inline correction | done | commit pending: 10/10 package/loader tests, packed artifact verified |
-| T4 | S3 | inline parent + independent verifier | in_progress | pending: controlled coverage evidence |
-| T5 | S1-S4 | inline (parent) | pending | pending: full verification and package evidence |
+| T3 | S1, S4 | delegated writer, then inline correction | done | commit `c5fdfb4`; 10/10 package/loader tests, packed artifact verified |
+| T4 | S3 | inline parent + independent verifier | pending | pending: controlled coverage evidence |
+| T5 | S1-S6 | inline (parent) | pending | pending: full verification and package evidence |
+| T6 | S5 | pending exploration | in_progress | pending: Pi restart continuation evidence |
+| T7 | S6 | pending exploration | pending | pending: retry-chat hygiene evidence |
 
 ## Log
 
@@ -58,3 +69,15 @@ Branch: `feat/opencode-compatibility`; delivery: ordered work-unit commits on th
 - **L7** — T2 evidence (S1, S2, S4): the delegated writer hit a provider rate limit before writing files, and its resumed run was interrupted with the parent process, so no partial source was retained. The parent completed the same bounded unit inline. RED was observed first: both focused files failed because the OpenCode modules did not exist. GREEN followed with 15/15 OpenCode tests and 65/65 classification, Pi retry-extension, and OpenCode tests passing; `pnpm run build` exited 0 after 10m30s. The shared core is commit `082cbcc` (`feat: add shared OpenCode retry decisions`); the plugin adapter is commit `349bc33` (`feat: add OpenCode retry plugin adapter`). The plugin only mutates `session.retry` decisions and observes successful/interrupted completion events; it never prompts, synthesizes messages, or restarts a session. Risk: item 3 — the backoff helper moved into a shared module used by both adapters, but the existing Pi backoff test remained unchanged and green.
 
 - **L8** — T3 evidence (S1, S4): the packaging worker was interrupted after writing its bounded diff and returned no result transcript, so the parent reviewed and corrected the diff instead of assuming its report. The worker had used OpenCode V1's nested `plugin` tuple syntax; the parent replaced it with the current V2 `plugins: [{ package, options }]` form in the README, troubleshooting guide, and real-loader test. The controlled real-loader test passed against OpenCode v2.2.6 and selected `dist/opencode.js`; 10/10 focused package and loader tests passed. `pnpm run verify:package` verified the real packed artifact with a function-shaped Pi root export and the object-shaped `gentle-retry` OpenCode server export. Risk: item 3 — the package gains an explicit `./server` export while the root Pi export and `pi.extensions` metadata remain unchanged; both entrypoints are asserted from the packed artifact.
+
+- **L9** — Requirement change, verbatim: "Añade compatibilidad a estos errores. Error: Connection error.: getaddrinfo ENOTFOUND integrate.api.nvidia.com Warning: Context usage is at 106% (≥ 90%); consider compacting before the next turn. Error: Connection error.: getaddrinfo ENOTFOUND integrate.api.nvidia.com Error: Request timed out.: Connect Timeout Error (attempted addresses: 99.83.136.103:443, 75.2.113.119:443, timeout: 10000ms) (UND_ERR_CONNECT_TIMEOUT) Error: terminated: read ETIMEDOUT"
+
+- **L10** — Requirement refinement (S2): the DNS lookup failure, connect timeout, and read timeout are transient and must be retried by both Pi and OpenCode. The 106% context-usage warning is not a transient provider failure: retrying the same oversized context cannot reduce it, so gentle-retry must leave it to Pi/OpenCode compaction instead of consuming a retry attempt. T1 is reopened for exact classifier coverage; T4 waits for that correction before the complete regression run.
+
+- **L11** — Requirement change, verbatim: "Aveces se me cierra la terminal y cuando la vielvo a abrir la conversacion no continua automaticamente como deberia hacer, revisa eso y haz que cuando abra mi terminal si lo tengo configurado en el menu continuen las conversaciones en gentle-shell (pi) por donde mismo se crean, como si sucede en Opencode no se que mecanismo vas a usar si enviarle un prompt u otra cosa."
+
+- **L12** — Requirement change, verbatim: "Cuando gentle-retry lleva bastante tiempo reintentando se llena la conversasion de errores como podemos mantener ej funcionamiento pero sin que los errores se muestren como parte del chat ?"
+
+- **L13** — Scope split (S5, S6): T6 investigates and repairs Pi restart continuation in the original session, using the existing opt-in menu state and an exactly-once durable claim. T7 investigates the supported Pi extension boundary for keeping long retry sequences operational without rendering every failed provider attempt as normal chat history. The two units are independent: T6 changes continuation detection/claiming; T7 changes retry presentation only.
+
+- **L14** — T1 evidence (S2, new failure forms): RED was observed with 9/10 classifier tests passing; the new bare DNS lookup failed because `ENOTFOUND` was not classified. GREEN followed with 10/10 passing after adding `ENOTFOUND`/`EAI_AGAIN` as connection failures and explicit `UND_ERR_CONNECT_TIMEOUT` as a timeout. The exact DNS, connect-timeout, and read-timeout forms are transient; the 106% context-usage warning remains non-transient and is left to Pi/OpenCode compaction. Risk: none — the shared classifier remains additive and existing quota, auth, generic 400, and content-safety cases are unchanged.
