@@ -35,6 +35,7 @@ import {
 	writeOnboardingMarker,
 } from "./retry-onboarding.js";
 import { guardExtensionEvents } from "./stale-context.js";
+import { retryDelayMs } from "./retry-backoff.js";
 
 const RETRY_STATUS_TEXT = "Transient provider retry";
 const OFF_TEXT = "OFF";
@@ -135,12 +136,6 @@ function nextAttempt(ctx: ExtensionContext): number {
 	const attempt = (attemptBySession.get(key) ?? 0) + 1;
 	attemptBySession.set(key, attempt);
 	return attempt;
-}
-
-function retryDelayMs(attempt: number, base: number, max: number): number {
-	const exponential = base * Math.pow(1.8, attempt - 1);
-	const jitter = exponential * 0.1 * Math.random();
-	return Math.round(Math.min(exponential + jitter, max));
 }
 
 function formatDelay(delayMs: number): string {
