@@ -22,9 +22,11 @@ registerHooks({
 const extensionModule = await import("../src/extension.ts");
 const policyModule = await import("../src/retry-policy.ts");
 const autoResumeModule = await import("../src/auto-resume.ts");
+const pendingResumeModule = await import("../src/pending-resume.ts");
 const { default: gentleRetryExtension, createGentleRetryExtension, resetExtensionState } = extensionModule;
 const { writeRetryPolicy } = policyModule;
 const { AUTO_RESUME_PROMPT } = autoResumeModule;
+const { writePendingResume } = pendingResumeModule;
 
 const USER = (text: string) => ({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
 
@@ -671,10 +673,10 @@ test("auto-resume does nothing while it is disabled", async () => {
 	h.cleanup();
 });
 
-test("auto-resume ignores completed, aborted, and failed turns", async () => {
+test("auto-resume ignores completed, aborted, and permanent failed turns", async () => {
 	const h = harness();
 	await h.commands.get("gentle:retry")!.handler("auto-resume on", h.ctx);
-	for (const stopReason of ["stop", "aborted", "error"]) {
+	for (const stopReason of ["stop", "aborted"]) {
 		h.branch = [
 			{ id: "entry-user", type: "message", message: USER("keep going") },
 			{
@@ -685,11 +687,46 @@ test("auto-resume ignores completed, aborted, and failed turns", async () => {
 		];
 		await startSessionWithReason(h, "resume");
 	}
+	h.branch = [
+		{ id: "entry-user", type: "message", message: USER("keep going") },
+		{ id: "entry-assistant", type: "message", message: ASSISTANT_ERROR("authentication failed") },
+	];
+	await startSessionWithReason(h, "resume");
 	assert.equal(h.sent.length, 0);
 	h.cleanup();
 });
 
-test("auto-resume never continues the same turn twice", async () => {
+test("auto-resume continues a transient provider failure when the original session is reopened", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("auto-resume on", h.ctx);
+	h.branch = [
+		{ id: "entry-user", type: "message", message: USER("keep going") },
+		{ id: "entry-assistant", type: "message", message: ASSISTANT_ERROR("Error: getaddrinfo ENOTFOUND integrate.api.nvidia.com") },
+	];
+	await startSessionWithReason(h, "resume");
+	assert.deepEqual(h.sent, [AUTO_RESUME_PROMPT]);
+	h.cleanup();
+});
+
+test("auto-resume re-triggers a persisted continuation that never completed", async () => {
+	const h = harness();
+	await h.commands.get("gentle:retry")!.handler("auto-resume on", h.ctx);
+	writePendingResume(h.configHome, {
+		sessionId: h.sessionId,
+		entryId: "entry-user",
+		reason: "auto-resume",
+	});
+	h.branch = [
+		{ id: "entry-user", type: "message", message: USER("keep going") },
+		{ id: "entry-continuation", type: "message", message: USER(AUTO_RESUME_PROMPT) },
+		{ id: "entry-assistant", type: "message", message: { role: "assistant", content: [], stopReason: "pending", timestamp: 0 } },
+	];
+	await startSessionWithReason(h, "resume");
+	assert.deepEqual(h.sent, [AUTO_RESUME_PROMPT]);
+	h.cleanup();
+});
+
+test("auto-resume never continues a completed turn twice", async () => {
 	const h = harness();
 	await h.commands.get("gentle:retry")!.handler("auto-resume on", h.ctx);
 	h.branch = [{ id: "entry-user", type: "message", message: USER("keep going") }];
@@ -698,6 +735,7 @@ test("auto-resume never continues the same turn twice", async () => {
 	h.branch = [
 		{ id: "entry-user", type: "message", message: USER("keep going") },
 		{ id: "entry-continuation", type: "message", message: USER(AUTO_RESUME_PROMPT) },
+		{ id: "entry-assistant", type: "message", message: ASSISTANT_OK() },
 	];
 	await startSessionWithReason(h, "resume");
 	assert.equal(h.sent.length, 1);

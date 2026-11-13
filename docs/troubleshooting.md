@@ -83,19 +83,29 @@ Pi owns the run: when the terminal closes, the process dies and the turn ends
 mid-flight. Reopening the session restores the transcript, not the run.
 
 `/gentle:retry auto-resume on` opts into continuing that interrupted turn. On
-the next session start, gentle-retry detects a turn with no reply — or a reply
-that was still running — and sends one continuation message.
+the next start of the original session, gentle-retry detects a turn with no
+reply, a reply that was still running, or a transient provider failure and
+sends one continuation message.
 
 ```bash
 /gentle:retry auto-resume on          # project scope
 /gentle:retry auto-resume on --global # every project
 /gentle:retry status                  # shows "auto resume: ON"
+pi --continue                         # reopen the original session for this folder
 ```
 
+Plain `pi` creates a new session. Use `pi --continue` or `/resume`, or make
+your terminal/Gentle Shell launcher use `pi --continue`, when you want the
+conversation reopened where it was created. Pi does not expose session
+replacement to extensions during `session_start`, so gentle-retry cannot switch
+a fresh session by itself.
+
 It stays quiet for turns that ended normally, that you aborted, or that failed
-with a provider error: those belong to you or to the retry sequence. The same
-turn is never continued twice. A turn that died after a tool already ran can
-repeat that side effect, so the switch is opt-in.
+permanently. If a continuation prompt was saved but the process died before it
+completed, the same idempotent prompt is retried so the turn is not stranded.
+Recovery is therefore at-least-once, while a completed continuation is never
+sent twice. A turn that died after a tool already ran can repeat that side
+effect, so the switch is opt-in.
 
 What it does not do is keep the work running while the terminal stays closed.
 That needs a session host that owns the run, and Pi does not provide one.

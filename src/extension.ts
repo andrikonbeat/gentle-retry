@@ -585,9 +585,10 @@ function autoResumeOnSessionStart(event: SessionStartEvent, ctx: ExtensionContex
 		entries: branch,
 		marker: readAutoResumeMarker(configHome),
 		sessionId,
+		isTransientError: (errorMessage) => classifyTransientFailure(errorMessage) !== undefined,
 	});
 	if (!decision.resume) return;
-	if (hasPendingResume(readPendingResumes(configHome), sessionId, decision.entryId)) return;
+	if (!decision.retrigger && hasPendingResume(readPendingResumes(configHome), sessionId, decision.entryId)) return;
 	try {
 		pi.sendUserMessage(decision.prompt);
 	} catch {

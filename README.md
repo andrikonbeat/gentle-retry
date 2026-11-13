@@ -220,11 +220,20 @@ source, delay bounds, optional safety limits, pause state, and the auto-resume
 switch. `doctor` adds configuration and installation diagnostics; it never
 reads or prints credentials.
 
-`auto-resume` is a separate, opt-in switch. When it is on and you reopen a
-session whose last turn was interrupted — the terminal closed, the process was
-killed — gentle-retry sends one continuation message so the run picks up where
-it stopped. It never continues a turn that ended normally, that you aborted, or
-that failed with a provider error, and it never continues the same turn twice.
+`auto-resume` is a separate, opt-in switch. When it is on and the original
+session is reopened after the terminal closed or the process was killed,
+gentle-retry sends a continuation message so the run picks up where it stopped.
+It resumes missing or still-running replies and transient provider failures; it
+never continues a normally completed or explicitly aborted turn, and permanent
+provider errors stay untouched.
+
+Pi creates a new session when plain `pi` starts. To reopen the conversation in
+the session where it was created, open it with `pi --continue` (or `/resume`),
+or configure your terminal/Gentle Shell launcher to do so. The extension cannot
+replace the session from `session_start`: Pi exposes session replacement only
+to user-initiated commands. A continuation that was saved but never completed
+is retried with the same idempotent prompt, so recovery is at-least-once; a
+completed continuation is never sent twice.
 Because a turn can die after a tool already ran, the continuation is
 at-least-once: a side effect may repeat. That is why the switch is off by
 default.

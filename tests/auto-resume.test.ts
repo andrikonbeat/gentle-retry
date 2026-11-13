@@ -43,10 +43,11 @@ function scratch(prefix: string): string {
 
 const USER = (text: string) => ({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
 
-const ASSISTANT = (stopReason: string) => ({
+const ASSISTANT = (stopReason: string, errorMessage?: string) => ({
 	role: "assistant",
 	content: [{ type: "text", text: "partial" }],
 	stopReason,
+	...(errorMessage === undefined ? {} : { errorMessage }),
 	timestamp: 0,
 });
 
@@ -78,6 +79,27 @@ test("an assistant reply that was still running is interrupted", () => {
 		const turn = detectInterruptedTurn([entry("entry-user", USER("hi")), entry("entry-assistant", ASSISTANT(stopReason))]);
 		assert.equal(turn.interrupted, true, `stopReason ${stopReason} must auto-resume`);
 	}
+});
+
+test("a transient provider error is interrupted only when the host classifies it as retryable", () => {
+	const entries = [
+		entry("entry-user", USER("keep going")),
+		entry("entry-assistant", ASSISTANT("error", "Error: getaddrinfo ENOTFOUND integrate.api.nvidia.com")),
+	];
+	assert.equal(detectInterruptedTurn(entries).interrupted, false);
+	const turn = detectInterruptedTurn(entries, { isTransientError: (message) => message.includes("ENOTFOUND") });
+	assert.equal(turn.interrupted, true);
+	if (!turn.interrupted) return;
+	assert.equal(turn.errorMessage, "Error: getaddrinfo ENOTFOUND integrate.api.nvidia.com");
+});
+
+test("a permanent provider error is never interrupted", () => {
+	const entries = [
+		entry("entry-user", USER("keep going")),
+		entry("entry-assistant", ASSISTANT("error", "authentication failed")),
+	];
+	const turn = detectInterruptedTurn(entries, { isTransientError: () => false });
+	assert.equal(turn.interrupted, false);
 });
 
 test("the last user message wins over older replies", () => {
@@ -145,14 +167,39 @@ test("an interrupted turn resumes with the continuation prompt", () => {
 	if (!decision.resume) return;
 	assert.equal(decision.entryId, "entry-user");
 	assert.equal(decision.prompt, AUTO_RESUME_PROMPT);
+	assert.equal(decision.retrigger, false);
 });
 
-test("a turn that already carries the continuation prompt is never continued twice", () => {
+test("a completed continuation is never continued twice", () => {
 	const decision = decideAutoResume({
 		...decisionInput,
-		entries: [entry("entry-user", USER("keep going")), entry("entry-continuation", USER(AUTO_RESUME_PROMPT))],
+		entries: [
+			entry("entry-user", USER("keep going")),
+			entry("entry-continuation", USER(AUTO_RESUME_PROMPT)),
+			entry("entry-assistant", ASSISTANT("stop")),
+		],
 	});
-	assert.deepEqual(decision, { resume: false, reason: "already-continued" });
+	assert.deepEqual(decision, { resume: false, reason: "nothing-to-resume" });
+});
+
+test("a persisted continuation without a completed reply is retried instead of being stranded", () => {
+	const decision = decideAutoResume({
+		...decisionInput,
+		entries: [
+			entry("entry-user", USER("keep going")),
+			entry("entry-continuation", USER(AUTO_RESUME_PROMPT)),
+			entry("entry-assistant", ASSISTANT("pending")),
+		],
+		marker: {
+			schema: "gentle-pi.retry-auto-resume/v1",
+			sessionId: "session-a",
+			entryId: "entry-user",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+		},
+	});
+	assert.equal(decision.resume, true);
+	if (!decision.resume) return;
+	assert.equal(decision.retrigger, true);
 });
 
 test("the durable marker blocks a second continuation of the same turn", () => {

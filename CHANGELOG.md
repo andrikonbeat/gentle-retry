@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Auto-resume now continues transient provider failures when the original Pi
+  session is reopened, and retries a saved continuation that never completed.
+  Reopen the original session with `pi --continue` or `/resume`; plain `pi`
+  creates a new session.
 - The package root remains the Pi public API and default extension export; the
   OpenCode V2 plugin is exposed only through the explicit `./server` export.
 - OpenCode's native restart continuation and hard retry ceiling remain

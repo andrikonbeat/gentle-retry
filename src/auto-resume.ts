@@ -27,6 +27,7 @@ interface BranchMessage {
 	role?: string;
 	content?: unknown;
 	stopReason?: string;
+	errorMessage?: string;
 }
 
 interface BranchEntry {
@@ -38,7 +39,13 @@ interface BranchEntry {
 
 export type InterruptedTurn =
 	| { interrupted: false }
-	| { interrupted: true; entryId: string; userText: string };
+	| {
+			interrupted: true;
+			entryId: string;
+			userText: string;
+			assistantStopReason?: string;
+			errorMessage?: string;
+	  };
 
 export type AutoResumeSkipReason =
 	| "disabled"
@@ -50,7 +57,7 @@ export type AutoResumeSkipReason =
 
 export type AutoResumeDecision =
 	| { resume: false; reason: AutoResumeSkipReason }
-	| { resume: true; entryId: string; prompt: string };
+	| { resume: true; entryId: string; prompt: string; retrigger: boolean };
 
 export interface AutoResumeDecisionInput {
 	autoResumeEnabled: boolean;
@@ -60,6 +67,7 @@ export interface AutoResumeDecisionInput {
 	entries: readonly unknown[];
 	marker: AutoResumeMarker | undefined;
 	sessionId: string;
+	isTransientError?: (errorMessage: string) => boolean;
 }
 
 function messagesOf(entry: BranchEntry): BranchMessage[] {
@@ -98,7 +106,10 @@ function textOf(message: BranchMessage): string {
  * provider error — is never interrupted: those belong to the user or to the
  * retry sequence, not to auto-resume.
  */
-export function detectInterruptedTurn(entries: readonly unknown[]): InterruptedTurn {
+export function detectInterruptedTurn(
+	entries: readonly unknown[],
+	options?: { isTransientError?: (errorMessage: string) => boolean },
+): InterruptedTurn {
 	if (!Array.isArray(entries)) return { interrupted: false };
 	let lastUser: { entryId: string; userText: string } | undefined;
 	let lastAssistant: BranchMessage | undefined;
@@ -122,8 +133,27 @@ export function detectInterruptedTurn(entries: readonly unknown[]): InterruptedT
 	if (lastAssistant === undefined) {
 		return { interrupted: true, entryId: lastUser.entryId, userText: lastUser.userText };
 	}
-	if (typeof lastAssistant.stopReason === "string" && INTERRUPTED_STOP_REASONS.has(lastAssistant.stopReason)) {
-		return { interrupted: true, entryId: lastUser.entryId, userText: lastUser.userText };
+	const assistantStopReason = typeof lastAssistant.stopReason === "string" ? lastAssistant.stopReason : undefined;
+	if (assistantStopReason !== undefined && INTERRUPTED_STOP_REASONS.has(assistantStopReason)) {
+		return {
+			interrupted: true,
+			entryId: lastUser.entryId,
+			userText: lastUser.userText,
+			assistantStopReason,
+		};
+	}
+	if (
+		assistantStopReason === "error" &&
+		typeof lastAssistant.errorMessage === "string" &&
+		options?.isTransientError?.(lastAssistant.errorMessage) === true
+	) {
+		return {
+			interrupted: true,
+			entryId: lastUser.entryId,
+			userText: lastUser.userText,
+			assistantStopReason,
+			errorMessage: lastAssistant.errorMessage,
+		};
 	}
 	return { interrupted: false };
 }
@@ -142,15 +172,21 @@ export function decideAutoResume(input: AutoResumeDecisionInput): AutoResumeDeci
 	if (input.startReason !== "resume" && input.startReason !== "startup") {
 		return { resume: false, reason: "wrong-reason" };
 	}
-	const turn = detectInterruptedTurn(input.entries);
+	const turn = detectInterruptedTurn(input.entries, { isTransientError: input.isTransientError });
 	if (!turn.interrupted) return { resume: false, reason: "nothing-to-resume" };
-	// Our own continuation is the last user message: this turn was already continued.
-	if (turn.userText === AUTO_RESUME_PROMPT) return { resume: false, reason: "already-continued" };
+	// A persisted continuation without a completed reply was interrupted itself.
+	// Retry it with the same idempotent prompt instead of stranding the session.
+	const retrigger = turn.userText === AUTO_RESUME_PROMPT;
 	const marker = input.marker;
-	if (marker !== undefined && marker.sessionId === input.sessionId && marker.entryId === turn.entryId) {
+	if (
+		!retrigger &&
+		marker !== undefined &&
+		marker.sessionId === input.sessionId &&
+		marker.entryId === turn.entryId
+	) {
 		return { resume: false, reason: "already-continued" };
 	}
-	return { resume: true, entryId: turn.entryId, prompt: AUTO_RESUME_PROMPT };
+	return { resume: true, entryId: turn.entryId, prompt: AUTO_RESUME_PROMPT, retrigger };
 }
 
 export function autoResumeMarkerPath(configHome: string): string {
