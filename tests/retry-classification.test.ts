@@ -53,6 +53,7 @@ const REQUESTED_TRANSIENT_CASES: Array<[string, TransientFailureKind]> = [
 	["Error: Retry failed after 1 attempts: 400 {\"status\":400,\"title\":\"Bad Request\",\"detail\":\"Function id 'eb8265c4-e47d-4047-918d-c12746cc2cee': DEGRADED function cannot be invoked\"}", "degraded_function"],
 	["Error: 400 {\"status\":400,\"title\":\"Bad Request\",\"detail\":\"Function id 'eb8265c4-e47d-4047-918d-c12746cc2cee': DEGRADED function cannot be invoked\"}", "degraded_function"],
 	["Error: Stream ended without finish_reason", "incomplete_stream"],
+	['Error: 503: {"message":"content safety screening is temporarily unavailable"}', "content_safety_screening"],
 ];
 
 const BARE_TRANSIENT_CASES: Array<[string, TransientFailureKind]> = [
@@ -62,6 +63,7 @@ const BARE_TRANSIENT_CASES: Array<[string, TransientFailureKind]> = [
 	["502 <html> <head><title>502 Bad Gateway</title></head> <body> <center><h1>502 Bad Gateway</h1></center> <hr><center>openresty</center> </body> </html>", "gateway"],
 	["400 {\"status\":400,\"title\":\"Bad Request\",\"detail\":\"Function id 'eb8265c4-e47d-4047-918d-c12746cc2cee': DEGRADED function cannot be invoked\"}", "degraded_function"],
 	["Stream ended without finish_reason", "incomplete_stream"],
+	['503: {"message":"content safety screening is temporarily unavailable"}', "content_safety_screening"],
 ];
 
 test("classifies HTTP 429 and rate limit variants as rate_limit", () => {

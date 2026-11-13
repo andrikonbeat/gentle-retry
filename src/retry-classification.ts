@@ -4,7 +4,8 @@ export type TransientFailureKind =
 	| "connection"
 	| "gateway"
 	| "degraded_function"
-	| "incomplete_stream";
+	| "incomplete_stream"
+	| "content_safety_screening";
 
 export const TRANSIENT_FAILURE_LABEL: Record<TransientFailureKind, string> = {
 	rate_limit: "HTTP 429 / rate limit",
@@ -13,6 +14,7 @@ export const TRANSIENT_FAILURE_LABEL: Record<TransientFailureKind, string> = {
 	gateway: "HTTP 502 / gateway error",
 	degraded_function: "degraded function",
 	incomplete_stream: "incomplete stream",
+	content_safety_screening: "content safety screening unavailable",
 };
 
 const QUOTA_PATTERN = /\b(insufficient[_\s-]?quota|out[_\s-]?of[_\s-]?budget|quota|billing|available[_\s-]?balance|monthly[_\s-]?usage[_\s-]?limit|subscription[_\s-]?sharing|credit|spending[_\s-]?limit|payment|upgrade|plan[_\s-]?limit)\b/i;
@@ -32,6 +34,8 @@ const DEGRADED_FUNCTION_PATTERN = /\bDEGRADED\b[\s\S]*?\bfunction\b[\s\S]*?\bcan
 const HTTP_400_PATTERN = /(?:\bhttp\s*400\b|\bbad[_\s-]?request\b|\bstatus(?:[_\s-]?code)?["']?\s*[:=]\s*400\b|(?:^|[:\s])400\b)/i;
 
 const INCOMPLETE_STREAM_PATTERN = /\bstream[_\s-]?ended\b[\s\S]*?\bwithout\b[\s\S]*?\bfinish[_\s-]?reason\b/i;
+
+const CONTENT_SAFETY_SCREENING_PATTERN = /\bcontent[\s_-]+safety[\s_-]+screening[\s_-]+is[\s_-]+temporarily[\s_-]+unavailable\b/i;
 
 const RETRY_AFTER_SECONDS_PATTERN = /\bretry(?:[-_\s]?after)\b["']?\s*[:=]\s*["']?(\d+(?:\.\d+)?)\b/i;
 
@@ -90,5 +94,6 @@ export function classifyTransientFailure(errorMessage: string): TransientFailure
 	if (CONNECTION_PATTERN.test(errorMessage)) return "connection";
 	if (GATEWAY_PATTERN.test(errorMessage)) return "gateway";
 	if (INCOMPLETE_STREAM_PATTERN.test(errorMessage)) return "incomplete_stream";
+	if (CONTENT_SAFETY_SCREENING_PATTERN.test(errorMessage)) return "content_safety_screening";
 	return undefined;
 }
