@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- OpenCode 2 server plugin support through the explicit `./server` package
+  export. It uses OpenCode's session retry hook, accepts strict options from
+  `opencode.json`, and shares the project retry policy with Pi.
+- Retry coverage for HTTP 503 responses reporting
+  `content safety screening is temporarily unavailable`, including the wrapped
+  `Retry failed after 3 attempts` form.
 - Coverage for connection failures, HTTP 502, incomplete streams, and the named
   degraded-function HTTP 400 condition; generic HTTP 400 remains non-transient.
 - Optional `Retry-After` support, capped by `maxDelayMs`.
@@ -30,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The package root remains the Pi public API and default extension export; the
+  OpenCode V2 plugin is exposed only through the explicit `./server` export.
+- OpenCode's native restart continuation and hard retry ceiling remain
+  authoritative. The plugin sends no continuation prompt and cannot extend the
+  host's hard ceiling.
 - Only boundaries with outcome `error` are retried; completed and aborted
   boundaries now reset the attempt counter.
 - Retry backoff keeps factor 1.8 while applying jitter proportionally to the

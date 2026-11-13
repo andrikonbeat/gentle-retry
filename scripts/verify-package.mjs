@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+const ROOT_EXPORT_PATH = "./dist/index.js";
+const ROOT_TYPES_PATH = "./dist/index.d.ts";
 const EXTENSION_PATH = "./dist/extension.js";
+const OPENCODE_PATH = "./dist/opencode.js";
+const OPENCODE_TYPES_PATH = "./dist/opencode.d.ts";
+const OPENCODE_PLUGIN_ID = "gentle-retry";
 const INSTALL_COMMAND = "pi install npm:gentle-retry";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -17,10 +22,47 @@ export function assertExtensionMetadata(packageJson) {
 	}
 }
 
+export function assertPackageExports(packageJson) {
+	const rootExport = packageJson?.exports?.["."];
+	if (
+		typeof rootExport !== "object" ||
+		rootExport === null ||
+		rootExport.import !== ROOT_EXPORT_PATH ||
+		rootExport.types !== ROOT_TYPES_PATH
+	) {
+		throw new Error(`packed package is missing the root export for ${ROOT_EXPORT_PATH}`);
+	}
+
+	const serverExport = packageJson?.exports?.["./server"];
+	if (typeof serverExport !== "object" || serverExport === null) {
+		throw new Error("packed package is missing ./server package export");
+	}
+	if (serverExport.import !== OPENCODE_PATH) {
+		throw new Error(`packed ./server package export must point to ${OPENCODE_PATH}`);
+	}
+	if (serverExport.types !== OPENCODE_TYPES_PATH) {
+		throw new Error(`packed package is missing types for ./server package export (${OPENCODE_TYPES_PATH})`);
+	}
+}
+
 export function assertDefaultExport(extensionModule) {
 	if (typeof extensionModule?.default !== "function") {
 		throw new Error("packed dist/extension.js default export is not a function");
 	}
+}
+
+export function assertOpenCodePlugin(openCodeModule) {
+	const plugin = openCodeModule?.default;
+	if (typeof plugin !== "object" || plugin === null || Array.isArray(plugin)) {
+		throw new Error("packed dist/opencode.js default export is not an object");
+	}
+	if (typeof plugin.id !== "string" || plugin.id !== OPENCODE_PLUGIN_ID) {
+		throw new Error(`packed dist/opencode.js default export must have a stable string id (${OPENCODE_PLUGIN_ID})`);
+	}
+	if (typeof plugin.setup !== "function") {
+		throw new Error("packed dist/opencode.js default export must have a setup function");
+	}
+	return plugin;
 }
 
 export function assertInstallCommand(readme) {
@@ -60,6 +102,16 @@ export async function verifyPackedArtifact(tarballPath) {
 		execFileSync("tar", ["-xzf", tarballPath, "-C", extractionDirectory, "--strip-components=1"]);
 		const packageJson = JSON.parse(readFileSync(join(extractionDirectory, "package.json"), "utf8"));
 		assertExtensionMetadata(packageJson);
+		assertPackageExports(packageJson);
+
+		const rootTypesPath = join(extractionDirectory, "dist", "index.d.ts");
+		const serverTypesPath = join(extractionDirectory, "dist", "opencode.d.ts");
+		if (!existsSync(rootTypesPath)) {
+			throw new Error(`packed package is missing root types: ${ROOT_TYPES_PATH}`);
+		}
+		if (!existsSync(serverTypesPath)) {
+			throw new Error(`packed package is missing server types: ${OPENCODE_TYPES_PATH}`);
+		}
 
 		const readme = readFileSync(join(extractionDirectory, "README.md"), "utf8");
 		assertInstallCommand(readme);
@@ -68,11 +120,18 @@ export async function verifyPackedArtifact(tarballPath) {
 		const extensionModule = await import(pathToFileURL(extensionPath).href);
 		assertDefaultExport(extensionModule);
 
+		const openCodePath = join(extractionDirectory, "dist", "opencode.js");
+		const openCodeModule = await import(pathToFileURL(openCodePath).href);
+		const openCodePlugin = assertOpenCodePlugin(openCodeModule);
+
 		return {
 			packageName: packageJson.name,
 			packageVersion: packageJson.version,
 			extensionPath: EXTENSION_PATH,
 			defaultExportType: typeof extensionModule.default,
+			openCodePath: OPENCODE_PATH,
+			openCodeId: openCodePlugin.id,
+			openCodeSetupType: typeof openCodePlugin.setup,
 		};
 	} finally {
 		rmSync(extractionDirectory, { recursive: true, force: true });
@@ -96,6 +155,7 @@ if (invokedPath === import.meta.url) {
 		console.log(`Verified packed artifact: ${result.packageName}@${result.packageVersion}`);
 		console.log(`Extension metadata: ${result.extensionPath}`);
 		console.log(`Default export: ${result.defaultExportType}`);
+		console.log(`OpenCode server: ${result.openCodePath} (${result.openCodeId})`);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : error);
 		process.exitCode = 1;

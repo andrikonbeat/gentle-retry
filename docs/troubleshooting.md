@@ -1,5 +1,47 @@
 # Troubleshooting
 
+## OpenCode 2 plugin
+
+Install the server plugin with:
+
+```bash
+opencode plugin add gentle-retry
+```
+
+The plugin is **off** by default, like the Pi extension. Enable it in
+`opencode.json` with the OpenCode V2 `plugins` array:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "gentle-retry",
+      "options": {
+        "policy": "on",
+        "baseDelayMs": 2000,
+        "maxDelayMs": 60000
+      }
+    }
+  ]
+}
+```
+
+Only `policy`, `baseDelayMs`, `maxDelayMs`, `maxAttempts`, and `maxElapsedMs`
+are accepted. Unknown options and invalid values fail closed to `off`. Pi and
+OpenCode 2 also share the project policy at
+`<project>/.pi/gentle-ai/retry-policy.json`. Valid plugin options override
+individual fields from that shared policy.
+
+The plugin retries transient failures, including HTTP 503 responses with
+`content safety screening is temporarily unavailable`. Optional attempt and
+elapsed-time limits are enforced independently per OpenCode session.
+
+OpenCode owns restart continuation. The plugin sends no continuation prompt
+and does not restart or synthesize a session. OpenCode's hard retry ceiling
+also remains in force because the public retry hook cannot extend it. The Pi
+commands and menu described below do not exist in OpenCode.
+
 ## Commands and diagnostics
 
 Run `/gentle:retry status` to see the effective policy, whether it came from

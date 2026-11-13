@@ -5,18 +5,22 @@
 [![npm downloads](https://img.shields.io/npm/dm/gentle-retry.svg)](https://www.npmjs.com/package/gentle-retry)
 [![license](https://img.shields.io/npm/l/gentle-retry.svg)](https://github.com/andrikonbeat/gentle-retry/blob/main/LICENSE)
 
-Unlimited retry for transient provider failures in [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent) and [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell).
+Retry for transient provider failures in [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent), [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell), and [OpenCode 2](https://opencode.ai).
 
 Pi already retries transient failures a few times with its own backoff. When that
 budget runs out, the run stops and the work in progress stops with it. This
 extension keeps the run alive instead: it waits, asks again with the same
-conversation, and repeats for as long as the cause stays transient.
+conversation, and repeats for as long as the cause stays transient. OpenCode 2
+uses a separate server plugin entry point and participates in its session retry
+hook.
 
 It never retries quota, billing, payment, upgrade, authentication, or
 authorization failures. Waiting does not fix those, and pretending otherwise
 only wastes your time.
 
 ## Install
+
+### Pi Coding Agent
 
 ```bash
 pi install npm:gentle-retry
@@ -36,6 +40,15 @@ pi install /path/to/gentle-retry
 
 Requirements: Pi Coding Agent 1.4.0 or newer, Node 22.19 or newer (Node 22 and
 24 are verified in CI).
+
+### OpenCode 2
+
+```bash
+opencode plugin add gentle-retry
+```
+
+The OpenCode plugin is separate from the Pi extension. The Pi commands and menu
+below remain Pi-only; OpenCode does not get a matching command or menu surface.
 
 > `pnpm add -g gentle-retry` does not register an extension with Pi. Use
 > `pi install`, or drop it under `~/.pi/agent/extensions/`.
@@ -77,6 +90,7 @@ menu — `Gentle retry (current: on)` — so you never have to remember a flag.
 | Timeout, deadline exceeded, dropped connection | yes |
 | Connection error | yes |
 | HTTP 502 or Bad Gateway | yes |
+| HTTP 503 with `content safety screening is temporarily unavailable` | yes |
 | Stream ended without `finish_reason` | yes |
 | HTTP 400 with `DEGRADED function cannot be invoked` | yes |
 | Any other HTTP 400 | no |
@@ -103,6 +117,9 @@ The safe default is off. Both files are optional, and the project file wins:
 - Project: `<project>/.pi/gentle-ai/retry-policy.json`
 - Global: `~/.pi/gentle-ai/retry-policy.json`, or `$GENTLE_PI_CONFIG_HOME/retry-policy.json`
 
+Pi and OpenCode 2 read the same project policy path. It provides one shared
+project policy without a separate OpenCode policy file.
+
 ```json
 {
   "schema": "gentle-pi.retry/v1",
@@ -125,6 +142,52 @@ two delay fields survive `enable` and `disable` cycles.
 
 A missing, unreadable, malformed or unknown-schema file is treated as `off`.
 Typos fail loudly instead of silently changing your retry behaviour.
+
+### OpenCode 2 plugin options
+
+OpenCode passes plugin options from `opencode.json` through the V2 `plugins`
+array. Each entry names the package and provides the strict options object:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "gentle-retry",
+      "options": {
+        "policy": "on",
+        "baseDelayMs": 2000,
+        "maxDelayMs": 60000,
+        "maxAttempts": 20,
+        "maxElapsedMs": 900000
+      }
+    }
+  ]
+}
+```
+
+The only accepted option names are `policy`, `baseDelayMs`, `maxDelayMs`,
+`maxAttempts`, and `maxElapsedMs`. Values must be valid and positive where
+applicable. An unknown option or invalid value fails closed to `off`; it does
+not fall back to guessing. Valid options override individual fields from the
+shared project policy. The safe default remains off when no options or policy
+enable it.
+
+`maxAttempts` and `maxElapsedMs` are enforced per OpenCode session. Reaching a
+limit in one session does not consume another session's budget.
+
+## OpenCode 2 retry and continuation behavior
+
+The OpenCode plugin registers the public `session.retry` hook and observes
+successful or interrupted executions. It covers the transient HTTP 503 response
+whose message is `content safety screening is temporarily unavailable`,
+including the wrapped form `Retry failed after 3 attempts`.
+
+OpenCode's native restart continuation remains authoritative. gentle-retry does
+not restart a session, synthesize a message, or send a continuation prompt.
+OpenCode's own hard retry ceiling also remains authoritative: the public retry
+hook can change a retry decision and delay, but it cannot extend OpenCode's
+internal hard ceiling.
 
 ## Controls
 

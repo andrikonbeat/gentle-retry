@@ -1,10 +1,22 @@
 {
   "name": "gentle-retry",
   "version": "0.1.0",
-  "description": "Reliable retry for transient provider failures in Gentle Shell and Pi Coding Agent",
+  "description": "Reliable retry for transient provider failures in Gentle Shell, Pi Coding Agent, and OpenCode 2",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/opencode.d.ts",
+      "import": "./dist/opencode.js",
+      "default": "./dist/opencode.js"
+    }
+  },
   "files": [
     "dist",
     "docs",
@@ -24,6 +36,7 @@
     "pi-coding-agent",
     "pi-package",
     "extension",
+    "opencode",
     "retry",
     "429",
     "timeout",
