@@ -38,6 +38,7 @@ import { guardExtensionEvents } from "./stale-context.js";
 import { retryDelayMs } from "./retry-backoff.js";
 
 const RETRY_STATUS_TEXT = "Transient provider retry";
+const RETRY_STATUS_KEY = "gentle-retry";
 const OFF_TEXT = "OFF";
 const ON_TEXT = "ON";
 const RECONNECT_WAIT_MS = 300_000;
@@ -75,10 +76,15 @@ function sessionKey(ctx: ExtensionContext): string {
 	return ctx.sessionManager?.getSessionId?.() ?? "default";
 }
 
+function setRetryStatus(ctx: ExtensionContext, text: string | undefined): void {
+	ctx.ui?.setStatus?.(RETRY_STATUS_KEY, text);
+}
+
 function resetAttempts(ctx: ExtensionContext): void {
 	const key = sessionKey(ctx);
 	attemptBySession.delete(key);
 	firstFailureAtBySession.delete(key);
+	setRetryStatus(ctx, undefined);
 	const reconnectState = reconnectStates.get(key);
 	if (reconnectState) reconnectState.offlineWaitMs = 0;
 }
@@ -351,8 +357,11 @@ function continuationResult(
 	const drafts = omissionDrafts(event.context.contextEntries, failed).filter(
 		(draft) => !alreadyTargeted.has(draft.targetId),
 	);
-	if (drafts.length === 0) return undefined;
-	ctx.ui.notify(notice);
+	if (drafts.length === 0) {
+		setRetryStatus(ctx, undefined);
+		return undefined;
+	}
+	setRetryStatus(ctx, notice);
 	return { entries: [...event.entries, ...drafts], continue: true };
 }
 
@@ -605,7 +614,7 @@ function autoResumeOnSessionStart(event: SessionStartEvent, ctx: ExtensionContex
 	} catch {
 		// A read-only home must not break the session start.
 	}
-	ctx.ui?.notify?.("Resuming the interrupted turn…", "info");
+	setRetryStatus(ctx, "Resuming the interrupted turn…");
 }
 
 /**
@@ -667,7 +676,7 @@ async function agentBeforeSettleHandler(
 			if (kind) {
 				firstFailureAtBySession.set(key, firstFailureAtBySession.get(key) ?? Date.now());
 			}
-			ctx.ui.notify("Waiting for the network to come back… Press Esc to stop.");
+			setRetryStatus(ctx, "Waiting for the network to come back… Press Esc to stop.");
 			const waitStartedAt = Date.now();
 			let connectivity: Awaited<ReturnType<ConnectivityWatcher["waitForOnline"]>>;
 			let aborted = false;
@@ -742,9 +751,11 @@ async function agentBeforeSettleHandler(
 	const delayMs = retryAfterMs === undefined
 		? retryDelayMs(attempt, policy.baseDelayMs, policy.maxDelayMs)
 		: Math.min(retryAfterMs, policy.maxDelayMs);
-	ctx.ui.notify(
+	setRetryStatus(
+		ctx,
 		`Retry ${attempt} (${TRANSIENT_FAILURE_LABEL[kind]}) — waiting ${formatDelay(delayMs)}… Press Esc to stop.`,
 	);
+	pi.appendEntry?.("gentle-retry-retry", { attempt, kind, delayMs });
 	try {
 		await wait(delayMs, ctx.signal);
 	} catch {

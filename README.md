@@ -313,6 +313,19 @@ the model context first — the same recovery Pi performs on its own retries —
 the model never sees a half-written turn. No new user prompt is created and your
 conversation is untouched.
 
+Retry progress is shown in the transient footer status instead of being added to
+normal chat notifications, and the status is cleared when the turn completes.
+Each attempt also records a compact `gentle-retry-retry` custom entry with its
+attempt number, failure kind, and delay. Custom entries stay out of LLM context
+and have no chat renderer.
+
+Pi owns the rendering of failed assistant messages. Its extension API currently
+has no supported way for an extension to hide or delete one, so a provider's
+own error message can still appear in the Pi transcript even though it is
+omitted from the model context. Fully hiding those entries requires a Pi host
+change such as a non-displayed assistant-message flag or a TUI filter;
+gentle-retry does not falsify transcript messages to work around that boundary.
+
 The attempt counter resets on a completed turn, an abort, a non-transient
 failure, a policy switch, or a session change.
 

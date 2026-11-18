@@ -88,6 +88,7 @@ function harness() {
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
 	const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => unknown>>();
 	const notices: string[] = [];
+	const statuses: Array<{ key: string; text: string | undefined }> = [];
 	const sent: SentMessage[] = [];
 	let sessionId = "test-session";
 	let branch: unknown[] = [
@@ -101,7 +102,7 @@ function harness() {
 		sessionManager: { getSessionId: () => sessionId, getBranch: () => branch },
 		ui: {
 			notify: (text: string) => notices.push(text),
-			setStatus: () => {},
+			setStatus: (key: string, text: string | undefined) => statuses.push({ key, text }),
 			setWidget: () => {},
 		},
 		signal: controller.signal,
@@ -117,6 +118,7 @@ function harness() {
 		registerTool: () => {},
 		registerMessageRenderer() {},
 		registerFlag() {},
+		appendEntry() {},
 		sendUserMessage: (text: string, options?: { deliverAs?: "steer" | "followUp" }) => {
 			sent.push({ text, options });
 		},
@@ -137,6 +139,7 @@ function harness() {
 		ctx,
 		commands,
 		notices,
+		statuses,
 		sent,
 		handlers,
 		get sessionId() { return sessionId; },
@@ -148,6 +151,10 @@ function harness() {
 		controller,
 		cleanup,
 	};
+}
+
+function statusTexts(h: ReturnType<typeof harness>): string[] {
+	return h.statuses.flatMap((status) => status.text === undefined ? [] : [status.text]);
 }
 
 async function settle(h: ReturnType<typeof harness>, event: unknown) {
@@ -207,7 +214,7 @@ test("reconnect is off by default and does not probe", async () => {
 	const result = await withRandom(0, () => settle(h, event)) as { continue: boolean };
 	assert.equal(result.continue, true);
 	assert.equal(probes, 0);
-	assert.deepEqual(h.notices, [
+	assert.deepEqual(statusTexts(h), [
 		"Retry 1 (timeout) — waiting 1ms… Press Esc to stop.",
 		"Continuing after timeout (attempt 1)…",
 	]);
@@ -254,7 +261,7 @@ test("a provider timeout on a reachable machine follows today's retry path", asy
 	const result = await withRandom(0, () => settle(h, event)) as { continue: boolean };
 	assert.equal(result.continue, true);
 	assert.equal(probes, 1);
-	assert.deepEqual(h.notices, [
+	assert.deepEqual(statusTexts(h), [
 		"Retry 1 (timeout) — waiting 1ms… Press Esc to stop.",
 		"Continuing after timeout (attempt 1)…",
 	]);
@@ -282,15 +289,16 @@ test("an offline failure waits without consuming an attempt and continues the sa
 	const result = await settle(h, event) as { continue: boolean };
 	assert.equal(result.continue, true);
 	assert.equal(probes, 3);
-	assert.match(h.notices[0]!, /Waiting for the network to come back/);
-	assert.match(h.notices[1]!, /Continuing after the network outage/);
-	assert.equal(h.notices.some((notice) => notice.startsWith("Retry ")), false);
+	assert.match(statusTexts(h)[0]!, /Waiting for the network to come back/);
+	assert.match(statusTexts(h)[1]!, /Continuing after the network outage/);
+	assert.equal(statusTexts(h).some((status) => status.startsWith("Retry ")), false);
 
 	// The reconnect continuation did not consume provider attempt 1.
 	h.notices.length = 0;
+	h.statuses.length = 0;
 	const next = await withRandom(0, () => settle(h, event)) as { continue: boolean };
 	assert.equal(next.continue, true);
-	assert.match(h.notices[0]!, /^Retry 1 /);
+	assert.match(statusTexts(h)[0]!, /^Retry 1 /);
 	h.cleanup();
 });
 
@@ -311,8 +319,8 @@ test("a non-classifiable failure waits while offline and then continues the turn
 	const result = await settle(h, event) as { continue: boolean };
 	assert.equal(result.continue, true);
 	assert.equal(probes, 3);
-	assert.match(h.notices[0]!, /Waiting for the network to come back/);
-	assert.equal(h.notices.some((notice) => notice.startsWith("Retry ")), false);
+	assert.match(statusTexts(h)[0]!, /Waiting for the network to come back/);
+	assert.equal(statusTexts(h).some((status) => status.startsWith("Retry ")), false);
 	h.cleanup();
 });
 
@@ -332,8 +340,8 @@ test("the offline wait is visible and Escape cancels it", async () => {
 	h.controller.abort();
 	const result = await pending;
 	assert.equal(result, undefined);
-	assert.match(h.notices[0]!, /Waiting for the network to come back.*Press Esc to stop/);
-	assert.equal(h.notices.some((notice) => notice.startsWith("Continuing after the network outage")), false);
+	assert.match(statusTexts(h)[0]!, /Waiting for the network to come back.*Press Esc to stop/);
+	assert.equal(statusTexts(h).some((status) => status.startsWith("Continuing after the network outage")), false);
 	h.cleanup();
 });
 
@@ -429,7 +437,7 @@ test("an aborted turn does not release the reconnect budget", async () => {
 	], "aborted"));
 	const exhausted = await settle(h, failed);
 	assert.equal(exhausted, undefined);
-	assert.equal(h.notices.filter((notice) => notice.startsWith("Waiting for the network")).length, 3);
+	assert.equal(statusTexts(h).filter((status) => status.startsWith("Waiting for the network")).length, 3);
 	h.cleanup();
 });
 
@@ -619,11 +627,11 @@ test("the reconnect budget stops after three resumes and resets on a successful 
 		const result = await settle(h, failed) as { continue: boolean };
 		assert.equal(result.continue, true);
 	}
-	assert.equal(h.notices.filter((notice) => notice.startsWith("Waiting for the network")).length, 3);
+	assert.equal(statusTexts(h).filter((status) => status.startsWith("Waiting for the network")).length, 3);
 
 	const exhausted = await settle(h, failed);
 	assert.equal(exhausted, undefined);
-	assert.equal(h.notices.filter((notice) => notice.startsWith("Waiting for the network")).length, 3);
+	assert.equal(statusTexts(h).filter((status) => status.startsWith("Waiting for the network")).length, 3);
 
 	await settle(h, settleEvent([
 		{ id: "entry-user", messages: [USER("hello")] },
@@ -631,6 +639,6 @@ test("the reconnect budget stops after three resumes and resets on a successful 
 	], "completed"));
 	const afterSuccess = await settle(h, failed) as { continue: boolean };
 	assert.equal(afterSuccess.continue, true);
-	assert.equal(h.notices.filter((notice) => notice.startsWith("Waiting for the network")).length, 4);
+	assert.equal(statusTexts(h).filter((status) => status.startsWith("Waiting for the network")).length, 4);
 	h.cleanup();
 });

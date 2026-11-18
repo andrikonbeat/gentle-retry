@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Retry progress now uses transient footer status instead of normal chat
+  notifications. Attempts are recorded as compact non-LLM custom entries, and
+  the status clears when the turn completes. Pi-owned failed assistant messages
+  remain visible because the extension API has no supported hide/delete action.
 - Auto-resume now continues transient provider failures when the original Pi
   session is reopened, and retries a saved continuation that never completed.
   Reopen the original session with `pi --continue` or `/resume`; plain `pi`

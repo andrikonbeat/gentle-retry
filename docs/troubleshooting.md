@@ -208,6 +208,20 @@ If the provider error includes a usable `Retry-After` value, the provider value
 controls the wait instead. It is capped at `maxDelayMs`; malformed or unknown
 values fall back to the exponential backoff above.
 
+## Long retries fill the chat with errors
+
+Retry progress from gentle-retry now stays in the transient footer status and
+is cleared when the turn completes. Each attempt is also recorded as a compact
+`gentle-retry-retry` custom entry; those entries do not enter LLM context and
+are not rendered in normal chat.
+
+Pi's failed assistant messages are different: Pi owns their transcript and TUI
+rendering, and its extension API has no supported hide/delete operation.
+Those provider errors can therefore still be visible in the Pi chat even though
+gentle-retry omits them from the model context. Removing every such line needs
+a Pi host feature such as a non-displayed assistant-message flag or a TUI
+filter; an extension cannot provide that without changing the transcript.
+
 ```json
 { "schema": "gentle-pi.retry/v1", "policy": "on", "baseDelayMs": 1000, "maxDelayMs": 30000 }
 ```
