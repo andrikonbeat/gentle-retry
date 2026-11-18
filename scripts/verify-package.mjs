@@ -12,7 +12,9 @@ const EXTENSION_PATH = "./dist/extension.js";
 const OPENCODE_PATH = "./dist/opencode.js";
 const OPENCODE_TYPES_PATH = "./dist/opencode.d.ts";
 const OPENCODE_PLUGIN_ID = "gentle-retry";
+const LAUNCHER_PATH = "./bin/gentle-retry.mjs";
 const INSTALL_COMMAND = "pi install npm:gentle-retry";
+const GITHUB_SETUP_COMMAND = "npx --yes https://github.com/andrikonbeat/gentle-retry";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export function assertExtensionMetadata(packageJson) {
@@ -45,6 +47,12 @@ export function assertPackageExports(packageJson) {
 	}
 }
 
+export function assertLauncherCommand(packageJson) {
+	if (packageJson?.bin?.["gentle-retry"] !== LAUNCHER_PATH) {
+		throw new Error(`packed package is missing the launcher command bin entry for ${LAUNCHER_PATH}`);
+	}
+}
+
 export function assertDefaultExport(extensionModule) {
 	if (typeof extensionModule?.default !== "function") {
 		throw new Error("packed dist/extension.js default export is not a function");
@@ -69,6 +77,9 @@ export function assertInstallCommand(readme) {
 	const commands = readme.split(/\r?\n/).map((line) => line.trim());
 	if (!commands.includes(INSTALL_COMMAND)) {
 		throw new Error(`packed public instructions are missing the exact command: ${INSTALL_COMMAND}`);
+	}
+	if (!commands.includes(GITHUB_SETUP_COMMAND)) {
+		throw new Error(`packed public instructions are missing the exact command: ${GITHUB_SETUP_COMMAND}`);
 	}
 }
 
@@ -103,6 +114,10 @@ export async function verifyPackedArtifact(tarballPath) {
 		const packageJson = JSON.parse(readFileSync(join(extractionDirectory, "package.json"), "utf8"));
 		assertExtensionMetadata(packageJson);
 		assertPackageExports(packageJson);
+		assertLauncherCommand(packageJson);
+		if (!existsSync(join(extractionDirectory, "bin", "gentle-retry.mjs"))) {
+			throw new Error(`packed package is missing the launcher executable: ${LAUNCHER_PATH}`);
+		}
 
 		const rootTypesPath = join(extractionDirectory, "dist", "index.d.ts");
 		const serverTypesPath = join(extractionDirectory, "dist", "opencode.d.ts");
@@ -132,6 +147,7 @@ export async function verifyPackedArtifact(tarballPath) {
 			openCodePath: OPENCODE_PATH,
 			openCodeId: openCodePlugin.id,
 			openCodeSetupType: typeof openCodePlugin.setup,
+			launcherPath: LAUNCHER_PATH,
 		};
 	} finally {
 		rmSync(extractionDirectory, { recursive: true, force: true });
@@ -156,6 +172,7 @@ if (invokedPath === import.meta.url) {
 		console.log(`Extension metadata: ${result.extensionPath}`);
 		console.log(`Default export: ${result.defaultExportType}`);
 		console.log(`OpenCode server: ${result.openCodePath} (${result.openCodeId})`);
+		console.log(`Launcher command: ${result.launcherPath}`);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : error);
 		process.exitCode = 1;

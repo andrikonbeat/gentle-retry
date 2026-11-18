@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "Reliable retry for transient provider failures in Gentle Shell, Pi Coding Agent, and OpenCode 2",
   "type": "module",
+  "bin": {
+    "gentle-retry": "./bin/gentle-retry.mjs"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -18,6 +21,7 @@
     }
   },
   "files": [
+    "bin",
     "dist",
     "docs",
     "CHANGELOG.md"

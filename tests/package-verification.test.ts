@@ -12,6 +12,7 @@ function createPackedFixture({
 	includeInstallCommand = true,
 	includeServerExport = true,
 	includeServerTypes = true,
+	includeBin = true,
 	defaultExport = "export default function gentleRetryExtension() {}",
 	serverDefaultExport = "export default { id: \"gentle-retry\", setup() {} };",
 } = {}) {
@@ -19,6 +20,7 @@ function createPackedFixture({
 	const packageDirectory = join(fixtureDirectory, "package");
 	const extensionDirectory = join(packageDirectory, "dist");
 	mkdirSync(extensionDirectory, { recursive: true });
+	mkdirSync(join(packageDirectory, "bin"), { recursive: true });
 
 	writeFileSync(
 		join(packageDirectory, "package.json"),
@@ -27,6 +29,7 @@ function createPackedFixture({
 			version: "0.1.0",
 			type: "module",
 			pi: includeMetadata ? { extensions: ["./dist/extension.js"] } : { extensions: [] },
+			...(includeBin ? { bin: { "gentle-retry": "./bin/gentle-retry.mjs" } } : {}),
 			exports: {
 				".": {
 					types: "./dist/index.d.ts",
@@ -44,12 +47,13 @@ function createPackedFixture({
 		}),
 	);
 	writeFileSync(join(extensionDirectory, "extension.js"), `${defaultExport}\n`);
+	writeFileSync(join(packageDirectory, "bin", "gentle-retry.mjs"), "#!/usr/bin/env node\n");
 	writeFileSync(join(extensionDirectory, "index.d.ts"), "export default () => void;\n");
 	writeFileSync(join(extensionDirectory, "opencode.js"), `${serverDefaultExport}\n`);
 	writeFileSync(join(extensionDirectory, "opencode.d.ts"), "export default { id: string; setup(): void };\n");
 	writeFileSync(
 		join(packageDirectory, "README.md"),
-		includeInstallCommand ? "Install with:\n\npi install npm:gentle-retry\n" : "Install with:\n\npi install gentle-retry\n",
+		includeInstallCommand ? "Install with:\n\npi install npm:gentle-retry\n\nnpx --yes https://github.com/andrikonbeat/gentle-retry\n" : "Install with:\n\npi install gentle-retry\n",
 	);
 
 	const tarballPath = join(fixtureDirectory, "gentle-retry-0.1.0.tgz");
@@ -68,6 +72,15 @@ test("verifies both public entrypoints, metadata, and install command in a packe
 		assert.equal(result.openCodePath, "./dist/opencode.js");
 		assert.equal(result.openCodeId, "gentle-retry");
 		assert.equal(result.openCodeSetupType, "function");
+	} finally {
+		rmSync(fixture.fixtureDirectory, { recursive: true, force: true });
+	}
+});
+
+test("rejects a packed artifact without the launcher command", async () => {
+	const fixture = createPackedFixture({ includeBin: false });
+	try {
+		await assert.rejects(verifyPackedArtifact(fixture.tarballPath), /missing.*bin|launcher command/);
 	} finally {
 		rmSync(fixture.fixtureDirectory, { recursive: true, force: true });
 	}

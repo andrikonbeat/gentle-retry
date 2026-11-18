@@ -1,0 +1,27 @@
+# Self-contained automatic resume and GitHub installation
+
+Objective: keep all automatic-resume functionality in gentle-retry, without patching Gentle Shell, and provide one GitHub-based installation command for ordinary users.
+Branch: `feat/self-contained-auto-resume` from the verified `feat/opencode-compatibility` product candidate; delivery: bounded work units, global installation only after verification; tests: focused Node tests, typecheck, full suite, packed artifact and controlled installer/launcher checks.
+
+## Specs
+
+- **S1** — Original request, verbatim: "Para el auto resume hay que escibir en gentle-shell pero ese repositorio no es mio como puedo hacer eso parchando gentle-shell o como una extension ?? el objetivo es tener todo el funcionamiento dentro de gentle-retry."
+- **S2** — Prior requirement, verbatim: "Perfecto pero quiero no tener que escribir nada que suceda todo solo si tengo activo gentle-retry al iniciar la terminal todo continua solo son tocar nada."
+- **S3** — Distribution request, verbatim: "Ahora vamos a verificar que todo funcione dejarlo instalado en global y cerrar el producto para que un usuario normal pueda usarlo instalarlo desde el repo github con un solo enlace."
+
+## Tasks
+
+| ID | Specs | Route | Status | Commit / Evidence |
+| --- | --- | --- | --- | --- |
+| T1 | S1-S2 | inline parent | done | package-owned launcher; pty-backed and explicit-argument tests green |
+| T2 | S1-S3 | inline parent | done | one-command setup, idempotent backed-up shell integration and removal path green |
+| T3 | S1-S3 | inline parent + native assessment | in_progress | 19/19 focused tests; full suite/typecheck/package verification running |
+| T4 | S3 | inline parent | pending | Global installation and public GitHub installation path |
+
+## Log
+
+- **L1** — Verbatim: "Para el auto resume hay que escibir en gentle-shell pero ese repositorio no es mio como puedo hacer eso parchando gentle-shell o como una extension ?? el objetivo es tener todo el funcionamiento dentro de gentle-retry."
+- **L2** — Host evidence: a pure extension cannot select the previous session on ordinary startup. Pi creates/selects the SessionManager before loading extensions; session_start has no command-only switchSession method, and settings expose no auto-continue option. A package-owned executable must therefore add --continue before Pi starts. Pi package installation alone does not expose commands or shell startup integration, so the one-command setup must also install the executable and shell function.
+- **L3** — Architecture: gentle-retry owns the launcher and installer. No Gentle Shell source is changed or required. The launcher delegates to the user's real gentle-shell, falling back to pi, and preserves explicit arguments. Only an otherwise ordinary TTY launch with effective autoResume=true adds --continue. The installer uses one GitHub URL to install the global command and Pi extension, then adds an idempotent, removable shell block with an atomic write and one-time backup. The local experimental gentle-shell commit was not installed or published and is abandoned for this product direction.
+- **L4** — T1/T2 evidence: launcher modules were observed RED as missing, then passed 7/7 focused tests including a real pty launch and explicit argument preservation. Setup/uninstall was observed RED as unsupported, then passed with fake npm/Pi commands: installation order is global command then Pi extension, and a failure in either leaves shell startup unchanged. The combined launcher/setup/package group passes 19/19. The packed-artifact verifier now requires `bin/gentle-retry.mjs`, the package bin declaration, and the exact GitHub setup command in addition to the unchanged Pi/OpenCode contracts. Full verification is running before commit and global installation.
+- **Risk: items 2 and 5 (shell configuration and global installation)** — setup changes user shell startup and global packages only when the user explicitly runs the installer; writes are idempotent, atomic, backed up and removable, and tests must preserve unrelated content.

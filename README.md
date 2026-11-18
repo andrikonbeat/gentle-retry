@@ -20,7 +20,26 @@ only wastes your time.
 
 ## Install
 
-### Pi Coding Agent
+### Complete automatic-resume setup from GitHub
+
+With Node/npm, Pi, and Bash or Zsh already installed, run:
+
+```bash
+npx --yes https://github.com/andrikonbeat/gentle-retry
+```
+
+That one command installs the global `gentle-retry` command and the Pi
+extension, then adds a small `gentle-shell()` (or `pi()`) function to your
+current shell's startup file. It does not modify Gentle Shell itself. The file
+write is atomic and idempotent, and the first change keeps a
+`.gentle-retry-backup` beside your shell file. Open a new terminal afterwards
+and enable `Auto-resume` once from `/gentle:retry`.
+
+Use `command gentle-shell` or `command pi` to bypass the launcher. Run
+`gentle-retry uninstall` to remove only the shell integration; the global
+command and Pi package remain installed.
+
+### Pi Coding Agent (extension only)
 
 ```bash
 pi install npm:gentle-retry
@@ -227,13 +246,18 @@ It resumes missing or still-running replies and transient provider failures; it
 never continues a normally completed or explicitly aborted turn, and permanent
 provider errors stay untouched.
 
-Pi creates a new session when plain `pi` starts. To reopen the conversation in
-the session where it was created, open it with `pi --continue` (or `/resume`),
-or configure your terminal/Gentle Shell launcher to do so. The extension cannot
-replace the session from `session_start`: Pi exposes session replacement only
-to user-initiated commands. A continuation that was saved but never completed
-is retried with the same idempotent prompt, so recovery is at-least-once; a
-completed continuation is never sent twice.
+Pi creates a new session when plain `pi` or `gentle-shell` starts. The complete
+GitHub setup installs gentle-retry's own launcher so an ordinary interactive
+launch adds `--continue` automatically when auto-resume is enabled. It delegates
+to your real Gentle Shell or Pi executable and leaves every explicit argument
+unchanged. `gentle-retry launch` is also available directly, and `command
+gentle-shell` / `command pi` bypass it.
+
+The extension alone cannot replace the session from `session_start`: Pi exposes
+session replacement only to user-initiated commands. Without the launcher, open
+the original conversation with `pi --continue` or `/resume`. A continuation that
+was saved but never completed is retried with the same idempotent prompt, so
+recovery is at-least-once; a completed continuation is never sent twice.
 Because a turn can die after a tool already ran, the continuation is
 at-least-once: a side effect may repeat. That is why the switch is off by
 default.

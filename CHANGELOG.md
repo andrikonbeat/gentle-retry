@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A package-owned `gentle-retry launch` command and a one-command GitHub setup.
+  With auto-resume enabled, an ordinary interactive launch selects the latest
+  session through the real Gentle Shell/Pi executable without patching either
+  host. The idempotent Bash/Zsh integration is backed up and removable.
 - OpenCode 2 server plugin support through the explicit `./server` package
   export. It uses OpenCode's session retry hook, accepts strict options from
   `opencode.json`, and shares the project retry policy with Pi.
@@ -42,8 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remain visible because the extension API has no supported hide/delete action.
 - Auto-resume now continues transient provider failures when the original Pi
   session is reopened, and retries a saved continuation that never completed.
-  Reopen the original session with `pi --continue` or `/resume`; plain `pi`
-  creates a new session.
+  The package-owned launcher can select that original session automatically;
+  without it, use `pi --continue` or `/resume` because plain `pi` creates a new
+  session.
 - The package root remains the Pi public API and default extension export; the
   OpenCode V2 plugin is exposed only through the explicit `./server` export.
 - OpenCode's native restart continuation and hard retry ceiling remain
