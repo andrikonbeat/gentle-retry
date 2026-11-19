@@ -1,7 +1,7 @@
 {
   "name": "gentle-retry",
   "version": "0.2.3",
-  "description": "Reliable retry for transient provider failures in Gentle Shell, Pi Coding Agent, and OpenCode 2",
+  "description": "Keep Pi, Gentle Shell, and OpenCode 2 working through transient provider failures, with automatic resume, reconnect, and one-command setup",
   "type": "module",
   "bin": {
     "gentle-retry": "./bin/gentle-retry.mjs"

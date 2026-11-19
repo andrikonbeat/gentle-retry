@@ -1,171 +1,147 @@
+<div align="center">
+
 # gentle-retry
 
+**Keep working through transient provider failures.**
+
+Reliable retries for **Pi Coding Agent**, **Gentle Shell**, and **OpenCode 2** —
+with automatic session continuation, reconnect after outages, and a clean chat.
+
 [![CI](https://github.com/andrikonbeat/gentle-retry/actions/workflows/ci.yml/badge.svg)](https://github.com/andrikonbeat/gentle-retry/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/gentle-retry.svg)](https://www.npmjs.com/package/gentle-retry)
-[![npm downloads](https://img.shields.io/npm/dm/gentle-retry.svg)](https://www.npmjs.com/package/gentle-retry)
-[![license](https://img.shields.io/npm/l/gentle-retry.svg)](https://github.com/andrikonbeat/gentle-retry/blob/main/LICENSE)
+[![Release](https://img.shields.io/github/v/release/andrikonbeat/gentle-retry?display_name=tag)](https://github.com/andrikonbeat/gentle-retry/releases/latest)
+[![Node](https://img.shields.io/badge/node-22%20%7C%2024-339933?logo=node.js&logoColor=white)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Retry for transient provider failures in [Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent), [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell), and [OpenCode 2](https://opencode.ai).
+[Install](#install) · [Features](#features) · [OpenCode](#opencode-2) · [Configuration](#configuration) · [Documentation](#documentation)
 
-Pi already retries transient failures a few times with its own backoff. When that
-budget runs out, the run stops and the work in progress stops with it. This
-extension keeps the run alive instead: it waits, asks again with the same
-conversation, and repeats for as long as the cause stays transient. OpenCode 2
-uses a separate server plugin entry point and participates in its session retry
-hook.
+</div>
 
-It never retries quota, billing, payment, upgrade, authentication, or
-authorization failures. Waiting does not fix those, and pretending otherwise
-only wastes your time.
+## Why gentle-retry?
+
+Pi already retries transient failures a few times. When that budget runs out,
+the run stops — and your work stops with it. gentle-retry waits and tries again
+with the same conversation, while keeping permanent failures and retry noise
+under control.
+
+## Features
+
+| Capability | What you get |
+| --- | --- |
+| **Transient retries** | Backoff with jitter and `Retry-After` support for rate limits, timeouts, connection failures, and other temporary errors. |
+| **Automatic resume** | Reopen the previous Pi session and continue an interrupted turn without typing `--continue`. |
+| **Reconnect mode** | Resume live sessions when internet connectivity returns. |
+| **Quiet progress** | Retry state lives in the footer, not in a stream of chat notifications. |
+| **Shared policy** | One strict, project-over-global configuration for Pi and OpenCode 2. |
+| **Safe by default** | Retry, auto-resume, and reconnect are opt-in. Quota, billing, authentication, and permanent errors are never retried. |
 
 ## Install
 
-### Complete automatic-resume setup from GitHub
+### Complete setup — recommended
 
-With Node/npm, Pi, and Bash, Zsh, or Fish already installed, run:
+Requirements: Node 22.19+, npm, Pi 1.4+, and Bash, Zsh, or Fish.
 
 ```bash
 npx --yes https://github.com/andrikonbeat/gentle-retry/releases/latest/download/gentle-retry.tgz
 ```
 
-That one command installs the global `gentle-retry` command and the Pi
-extension, then adds a small `gentle-shell` (or `pi`) function to your current
-shell's startup file. It does not modify Gentle Shell itself. The file write is
-atomic and idempotent, and the first change keeps a `.gentle-retry-backup`
-beside your shell file. Open a new terminal afterwards and enable `Auto-resume`
-once from `/gentle:retry`.
+Then open a new terminal and enable the features you want:
 
-Use `command gentle-shell` or `command pi` to bypass the launcher. Run
-`gentle-retry uninstall` to remove only the shell integration; the global
-command and Pi package remain installed.
+```text
+/gentle:retry enable
+/gentle:retry auto-resume on
+```
 
-### Pi Coding Agent (extension only)
+The installer registers the global command and Pi extension, then adds a small
+shell function for automatic continuation. It does **not** modify Gentle Shell.
+The setup is idempotent, writes atomically, and keeps a backup before the first
+change.
+
+- `command gentle-shell` or `command pi` bypasses the launcher.
+- `gentle-retry uninstall` removes only the shell integration.
+- Recovery and full cleanup are covered in [Troubleshooting](docs/troubleshooting.md).
+
+<details>
+<summary><strong>Extension-only and local installation</strong></summary>
+
+<br>
+
+Install the published Pi extension without the launcher:
 
 ```bash
 pi install npm:gentle-retry
 ```
 
-Try it without installing:
+Try it once without installing:
 
 ```bash
 pi -e npm:gentle-retry
 ```
 
-From a local checkout:
+Use a local checkout:
 
 ```bash
 pi install /path/to/gentle-retry
 ```
 
-Requirements: Pi Coding Agent 1.4.0 or newer, Node 22.19 or newer (Node 22 and
-24 are verified in CI).
+Without the launcher, reopen the original session with `pi --continue` or
+`/resume`.
 
-### OpenCode 2
+</details>
+
+## What gets retried?
+
+| Failure | Retried |
+| --- | --- |
+| HTTP 429, rate limits, throttling | **Yes** |
+| Timeouts, dropped connections, DNS failures | **Yes** |
+| HTTP 502 and temporary HTTP 503 failures | **Yes** |
+| Content-safety screening temporarily unavailable | **Yes** |
+| Incomplete streams and named degraded-function errors | **Yes** |
+| Quota, billing, payment, or spending limits | **No** |
+| Authentication and authorization failures | **No** |
+| Generic HTTP 400 or unknown permanent failures | **No** |
+| Context-usage warnings requiring compaction | **No** |
+
+Backoff uses factor **1.8**, up to **10% jitter**, and a configurable ceiling.
+Valid `Retry-After` guidance takes precedence. Press **Escape** to stop a wait.
+
+## Everyday controls
+
+Run `/gentle:retry` with no arguments to open the interactive menu, or use:
+
+| Command | Action |
+| --- | --- |
+| `/gentle:retry enable [--global]` | Enable retries for the project or globally. |
+| `/gentle:retry disable [--global]` | Disable retries without deleting your settings. |
+| `/gentle:retry status` | Show effective policy, limits, and feature state. |
+| `/gentle:retry pause` / `resume` | Pause or restore retries for the current session. |
+| `/gentle:retry auto-resume on\|off [--global]` | Control continuation after reopening a session. |
+| `/gentle:retry reconnect ...` | Configure connectivity recovery. |
+| `/gentle:retry doctor` | Inspect configuration and installation diagnostics. |
+
+## Automatic resume and reconnect
+
+With **auto-resume** enabled, an ordinary interactive launch selects the latest
+Pi session automatically. gentle-retry then sends one idempotent continuation
+prompt only if the turn was interrupted or failed transiently. Completed turns
+and permanent failures are left alone.
+
+With **reconnect** enabled, live sessions wait for connectivity instead of
+ending when the network goes down. One outage resumes at most three times;
+billing and authentication failures never wait.
+
+Both features are opt-in because a recovered turn can repeat a side effect that
+already ran. See [Automatic resume and reconnect](docs/auto-resume.md).
+
+## OpenCode 2
+
+Install the plugin:
 
 ```bash
 opencode plugin add gentle-retry
 ```
 
-The OpenCode plugin is separate from the Pi extension. The Pi commands and menu
-below remain Pi-only; OpenCode does not get a matching command or menu surface.
-
-> `pnpm add -g gentle-retry` does not register an extension with Pi. Use
-> `pi install`, or drop it under `~/.pi/agent/extensions/`.
-
-## First run
-
-The extension installs **off**. That is deliberate: an unlimited retry loop
-should never switch itself on without you asking. The first time it loads in a
-project it says so, once, and names the command that turns it on:
-
-```
-gentle-retry installed — OFF. Retries transient provider failures such as HTTP 429 and timeouts:
-/gentle:retry enable keeps a run alive instead of stopping.
-```
-
-The notice appears once per machine and never again. Scripted and headless runs
-never see it.
-
-## Commands
-
-See [Controls](#controls) for the complete command surface. In short:
-
-```
-/gentle:retry enable     # keep runs alive through transient provider failures
-/gentle:retry disable    # back to Pi's own retry budget
-/gentle:retry status     # effective state, source, limits, and pause state
-/gentle:retry auto-resume on   # continue an interrupted turn when a session is reopened
-/gentle:retry reconnect global # resume live sessions when the internet comes back
-```
-
-Run `/gentle:retry` without arguments and the whole surface appears in one
-menu — `Gentle retry (current: on)` — so you never have to remember a flag.
-
-## What it retries
-
-| Cause | Retried |
-| --- | --- |
-| HTTP 429, rate limit, throttling | yes |
-| Timeout, deadline exceeded, dropped connection | yes |
-| Connection error | yes |
-| HTTP 502 or Bad Gateway | yes |
-| HTTP 503 with `content safety screening is temporarily unavailable` | yes |
-| Stream ended without `finish_reason` | yes |
-| HTTP 400 with `DEGRADED function cannot be invoked` | yes |
-| Any other HTTP 400 | no |
-| Quota exhausted, billing, credit, payment, upgrade or spending limit | no |
-| Authentication, authorization, any other error | no |
-
-When the provider includes usable `Retry-After` guidance (delta-seconds or an
-HTTP date), that value controls the next wait. It is still capped by
-`maxDelayMs`; malformed or unknown guidance falls back to normal backoff.
-
-When a retry happens you see which failure it is waiting on, how long, and how
-many attempts have already failed:
-
-```
-Retry 3 (HTTP 429 / rate limit) — waiting 7s… Press Esc to stop.
-```
-
-Press **Escape** at any moment to stop the wait.
-
-## Configuration
-
-The safe default is off. Both files are optional, and the project file wins:
-
-- Project: `<project>/.pi/gentle-ai/retry-policy.json`
-- Global: `~/.pi/gentle-ai/retry-policy.json`, or `$GENTLE_PI_CONFIG_HOME/retry-policy.json`
-
-Pi and OpenCode 2 read the same project policy path. It provides one shared
-project policy without a separate OpenCode policy file.
-
-```json
-{
-  "schema": "gentle-pi.retry/v1",
-  "policy": "on",
-  "baseDelayMs": 2000,
-  "maxDelayMs": 60000
-}
-```
-
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `policy` | `"off"` | `"on"` or `"off"`. Anything else fails closed. |
-| `baseDelayMs` | `2000` | First wait, in milliseconds. |
-| `maxDelayMs` | `60000` | Ceiling for the growing wait. |
-| `autoResume` | `false` | Continue an interrupted turn when the session is reopened. |
-
-Each attempt multiplies the exponential wait by 1.8. Jitter is up to 10% of the
-current exponential delay, and the final wait never exceeds `maxDelayMs`. The
-two delay fields survive `enable` and `disable` cycles.
-
-A missing, unreadable, malformed or unknown-schema file is treated as `off`.
-Typos fail loudly instead of silently changing your retry behaviour.
-
-### OpenCode 2 plugin options
-
-OpenCode passes plugin options from `opencode.json` through the V2 `plugins`
-array. Each entry names the package and provides the strict options object:
+Configure it through OpenCode V2's `plugins` array:
 
 ```json
 {
@@ -176,94 +152,24 @@ array. Each entry names the package and provides the strict options object:
       "options": {
         "policy": "on",
         "baseDelayMs": 2000,
-        "maxDelayMs": 60000,
-        "maxAttempts": 20,
-        "maxElapsedMs": 900000
+        "maxDelayMs": 60000
       }
     }
   ]
 }
 ```
 
-The only accepted option names are `policy`, `baseDelayMs`, `maxDelayMs`,
-`maxAttempts`, and `maxElapsedMs`. Values must be valid and positive where
-applicable. An unknown option or invalid value fails closed to `off`; it does
-not fall back to guessing. Valid options override individual fields from the
-shared project policy. The safe default remains off when no options or policy
-enable it.
+The plugin uses the public `session.retry` hook and shares the project policy
+with Pi. OpenCode remains responsible for restart continuation and its own hard
+retry ceiling; gentle-retry never starts a competing session or prompt.
 
-`maxAttempts` and `maxElapsedMs` are enforced per OpenCode session. Reaching a
-limit in one session does not consume another session's budget.
+## Configuration
 
-## OpenCode 2 retry and continuation behavior
+The safe default is **off**. Project settings override global settings:
 
-The OpenCode plugin registers the public `session.retry` hook and observes
-successful or interrupted executions. It covers the transient HTTP 503 response
-whose message is `content safety screening is temporarily unavailable`,
-including the wrapped form `Retry failed after 3 attempts`.
-
-OpenCode's native restart continuation remains authoritative. gentle-retry does
-not restart a session, synthesize a message, or send a continuation prompt.
-OpenCode's own hard retry ceiling also remains authoritative: the public retry
-hook can change a retry decision and delay, but it cannot extend OpenCode's
-internal hard ceiling.
-
-## Controls
-
-The command surface is intentionally small:
-
-```text
-/gentle:retry enable [--global]
-/gentle:retry disable [--global]
-/gentle:retry status
-/gentle:retry pause
-/gentle:retry resume
-/gentle:retry auto-resume on|off [--global]
-/gentle:retry reconnect off|session|global|enable|disable
-/gentle:retry doctor
-```
-
-Without arguments, `/gentle:retry` opens an interactive menu titled
-`Gentle retry (current: on)` with every action: enable and disable per project
-or globally, pause and resume for this session, the auto-resume switch, the
-reconnect scope and session opt-in, the status, and the diagnostics. The
-argument forms above stay available for scripts.
-
-Without `--global`, `enable` and `disable` write the project policy. With
-`--global`, they write the policy in the Gentle AI config home. A valid project
-policy still takes precedence over the global one.
-
-`pause` and `resume` affect only the current session. Pausing prevents retries
-without changing the saved policy. `status` shows the effective policy, its
-source, delay bounds, optional safety limits, pause state, and the auto-resume
-switch. `doctor` adds configuration and installation diagnostics; it never
-reads or prints credentials.
-
-`auto-resume` is a separate, opt-in switch. When it is on and the original
-session is reopened after the terminal closed or the process was killed,
-gentle-retry sends a continuation message so the run picks up where it stopped.
-It resumes missing or still-running replies and transient provider failures; it
-never continues a normally completed or explicitly aborted turn, and permanent
-provider errors stay untouched.
-
-Pi creates a new session when plain `pi` or `gentle-shell` starts. The complete
-GitHub setup installs gentle-retry's own launcher so an ordinary interactive
-launch adds `--continue` automatically when auto-resume is enabled. It delegates
-to your real Gentle Shell or Pi executable and leaves every explicit argument
-unchanged. `gentle-retry launch` is also available directly, and `command
-gentle-shell` / `command pi` bypass it.
-
-The extension alone cannot replace the session from `session_start`: Pi exposes
-session replacement only to user-initiated commands. Without the launcher, open
-the original conversation with `pi --continue` or `/resume`. A continuation that
-was saved but never completed is retried with the same idempotent prompt, so
-recovery is at-least-once; a completed continuation is never sent twice.
-Because a turn can die after a tool already ran, the continuation is
-at-least-once: a side effect may repeat. That is why the switch is off by
-default.
-
-Optional safety limits are off by default. Add positive integers to the policy
-file to cap a retry sequence:
+- Project: `<project>/.pi/gentle-ai/retry-policy.json`
+- Global: `~/.pi/gentle-ai/retry-policy.json`
+- Override: `$GENTLE_PI_CONFIG_HOME/retry-policy.json`
 
 ```json
 {
@@ -271,123 +177,40 @@ file to cap a retry sequence:
   "policy": "on",
   "baseDelayMs": 2000,
   "maxDelayMs": 60000,
-  "maxAttempts": 20,
-  "maxElapsedMs": 900000
+  "autoResume": false
 }
 ```
 
-`maxAttempts` caps extension retries in one sequence. `maxElapsedMs` caps the
-elapsed retry sequence time. When either limit is reached, gentle-retry reports
-it and stops instead of retrying. Omit either field to keep that dimension
-unlimited.
+Optional `maxAttempts` and `maxElapsedMs` limits are available when you want a
+bounded retry sequence. Missing or malformed policy fails closed to `off`.
+See [Configuration reference](docs/configuration.md).
 
-## Reconnect after an outage
+## Documentation
 
-When the machine loses the internet, a provider call fails and the turn ends.
-`reconnect` mode waits for the connectivity instead and resumes the work on
-its own:
-
-```bash
-/gentle:retry reconnect global   # every live Pi session resumes when the network returns
-/gentle:retry reconnect session  # only the sessions that opt in resume
-/gentle:retry reconnect enable   # opt this session in (scope "session")
-/gentle:retry reconnect disable  # opt this session out
-/gentle:retry reconnect off      # turn the feature off for this project
-```
-
-`global` is written to the global policy: it reaches every Pi session on the
-machine. `session` and `off` are written to the project policy, and a project
-policy still takes precedence over the global one.
-
-The feature is **off by default**, and it never changes what happens on a
-healthy machine:
-
-- A provider timeout while the computer still has internet stays a provider
-  failure: the retry sequence owns it, with the same delay and the same
-  attempts.
-- Only a real outage changes the behaviour. The connectivity probe asks "can
-  this machine reach the internet right now", and one failed probe is not
-  enough: two consecutive failures are required, so the check may cost two
-  small requests.
-- While the machine is offline the turn waits (up to five minutes, Esc stops
-  it) instead of ending, and that wait consumes no retry attempt.
-- If that wait runs out, the turn ends and the session keeps watching in the
-  background for up to an hour: it resumes by itself when the network comes
-  back, and `/gentle:retry reconnect disable` stops the watch.
-- When the connectivity returns, the same turn continues with the failed
-  message left out. If the turn already ended, the work continues in a new run
-  with one continuation message.
-- Billing, authentication, and bad-request failures never wait: no amount of
-  connectivity brings the quota back.
-- One outage resumes at most three times, and a turn is never resumed twice.
-
-A resumed turn can repeat a side effect that already ran (at-least-once), so
-the switch is opt-in. Reconnect covers the sessions that are alive: a session
-whose process already died is resumed by `auto-resume` when you reopen it.
-
-## How it works
-
-The extension hooks the moment Pi has exhausted its own retries and is about to
-settle the run. Only an error outcome can be retried. If the last assistant
-message carries a transient provider error, it waits with exponential backoff,
-then asks Pi for one more provider request with the same conversation.
-
-The failed assistant message, and any tool results it produced, are omitted from
-the model context first — the same recovery Pi performs on its own retries — so
-the model never sees a half-written turn. No new user prompt is created and your
-conversation is untouched.
-
-Retry progress is shown in the transient footer status instead of being added to
-normal chat notifications, and the status is cleared when the turn completes.
-Each attempt also records a compact `gentle-retry-retry` custom entry with its
-attempt number, failure kind, and delay. Custom entries stay out of LLM context
-and have no chat renderer.
-
-Pi owns the rendering of failed assistant messages. Its extension API currently
-has no supported way for an extension to hide or delete one, so a provider's
-own error message can still appear in the Pi transcript even though it is
-omitted from the model context. Fully hiding those entries requires a Pi host
-change such as a non-displayed assistant-message flag or a TUI filter;
-gentle-retry does not falsify transcript messages to work around that boundary.
-
-The attempt counter resets on a completed turn, an abort, a non-transient
-failure, a policy switch, or a session change.
-
-## Troubleshooting
-
-Known behaviours and fixes: **[docs/troubleshooting.md](docs/troubleshooting.md)**.
-
-Most common surprises:
-
-- Installed but silent → it is off; run `/gentle:retry enable`.
-- Still stopping on a failure → it was classified as non-transient, on purpose.
-- Project file ignored → it is malformed; `/gentle:retry status` says `malformed`.
-
-## Contributing and security
-
-Pull requests are welcome. Open an issue first, and read
-[CONTRIBUTING.md](CONTRIBUTING.md) for the development commands, the branch
-naming, and the pull request contract.
-
-To report a security problem, do not open a public issue — see
-[SECURITY.md](SECURITY.md).
+| Guide | Contents |
+| --- | --- |
+| [Configuration](docs/configuration.md) | Policy fields, backoff, limits, and OpenCode options. |
+| [Auto-resume and reconnect](docs/auto-resume.md) | Recovery behavior, safety boundaries, and lifecycle details. |
+| [Troubleshooting](docs/troubleshooting.md) | Common failures, recovery, and complete uninstall steps. |
+| [Changelog](CHANGELOG.md) | User-facing changes by release. |
+| [Contributing](CONTRIBUTING.md) | Development workflow and pull-request contract. |
+| [Security](SECURITY.md) | How to report vulnerabilities privately. |
 
 ## Development
 
 ```bash
 pnpm install
 pnpm run check     # TypeScript check
-pnpm test          # builds to dist/, then runs the suite
-pnpm run build     # build to dist/
+pnpm test          # Build and run the complete suite
+pnpm run build     # Compile to dist/
+pnpm run verify:package
 ```
 
-The suite exercises the real `agent_before_settle` event shape and Pi's real
-extension loader, so a green run means the built artifact loads and reads
-provider errors the way Pi emits them.
+The suite covers Pi's real extension loader, the OpenCode adapter, retry
+boundaries, shell integration, and the packed release artifact.
 
-Maintainers: release steps live in [docs/release.md](docs/release.md), and
-changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+Maintainer release steps are in [docs/release.md](docs/release.md).
 
 ## License
 
-MIT
+[MIT](LICENSE)
