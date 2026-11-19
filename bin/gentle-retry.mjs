@@ -6,7 +6,7 @@ import { buildLaunchPlan, resolveLaunchCommand } from "../dist/launcher.js";
 import { resolveRetryPolicy } from "../dist/retry-policy.js";
 import { installShellIntegration, removeShellIntegration } from "../dist/shell-integration.js";
 
-const DEFAULT_SOURCE = "https://github.com/andrikonbeat/gentle-retry/archive/refs/heads/main.tar.gz";
+const DEFAULT_SOURCE = "https://github.com/andrikonbeat/gentle-retry/releases/latest/download/gentle-retry.tgz";
 
 function help() {
 	return [

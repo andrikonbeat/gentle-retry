@@ -57,7 +57,7 @@ test("the public command uses a tarball and registers Pi from the global package
 	assert.equal(result.status, 0, result.stderr);
 	const calls = readFileSync(f.log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
 	assert.deepEqual(calls, [
-		{ name: "npm", args: ["install", "--global", "https://github.com/andrikonbeat/gentle-retry/archive/refs/heads/main.tar.gz"] },
+		{ name: "npm", args: ["install", "--global", "https://github.com/andrikonbeat/gentle-retry/releases/latest/download/gentle-retry.tgz"] },
 		{ name: "npm", args: ["root", "--global"] },
 		{ name: "pi", args: ["install", join(f.home, "global", "gentle-retry")] },
 	]);

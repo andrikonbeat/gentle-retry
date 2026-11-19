@@ -60,7 +60,7 @@ function createPackedFixture({
 	writeFileSync(join(extensionDirectory, "opencode.d.ts"), "export default { id: string; setup(): void };\n");
 	writeFileSync(
 		join(packageDirectory, "README.md"),
-		includeInstallCommand ? "Install with:\n\npi install npm:gentle-retry\n\nnpx --yes https://github.com/andrikonbeat/gentle-retry/archive/refs/heads/main.tar.gz\n" : "Install with:\n\npi install gentle-retry\n",
+		includeInstallCommand ? "Install with:\n\npi install npm:gentle-retry\n\nnpx --yes https://github.com/andrikonbeat/gentle-retry/releases/latest/download/gentle-retry.tgz\n" : "Install with:\n\npi install gentle-retry\n",
 	);
 
 	const tarballPath = join(fixtureDirectory, "gentle-retry-0.1.0.tgz");

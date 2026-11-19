@@ -14,7 +14,7 @@ const OPENCODE_TYPES_PATH = "./dist/opencode.d.ts";
 const OPENCODE_PLUGIN_ID = "gentle-retry";
 const LAUNCHER_PATH = "./bin/gentle-retry.mjs";
 const INSTALL_COMMAND = "pi install npm:gentle-retry";
-const GITHUB_SETUP_COMMAND = "npx --yes https://github.com/andrikonbeat/gentle-retry/archive/refs/heads/main.tar.gz";
+const GITHUB_SETUP_COMMAND = "npx --yes https://github.com/andrikonbeat/gentle-retry/releases/latest/download/gentle-retry.tgz";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export function assertExtensionMetadata(packageJson) {
