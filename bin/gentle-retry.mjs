@@ -58,7 +58,7 @@ function globalPiPackagePath() {
 }
 
 function selectedShell(value) {
-	const shell = value ?? basename(process.env.SHELL ?? "bash");
+	const shell = value ?? basename(process.env.SHELL || "bash");
 	if (shell !== "bash" && shell !== "zsh") throw new Error("shell integration supports bash and zsh");
 	return shell;
 }

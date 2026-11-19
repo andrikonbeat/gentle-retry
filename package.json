@@ -1,6 +1,6 @@
 {
   "name": "gentle-retry",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Reliable retry for transient provider failures in Gentle Shell, Pi Coding Agent, and OpenCode 2",
   "type": "module",
   "bin": {
