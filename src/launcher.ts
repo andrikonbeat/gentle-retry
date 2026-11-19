@@ -1,4 +1,4 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 
 export type LaunchTarget = "auto" | "gentle-shell" | "pi";
@@ -43,6 +43,7 @@ export function findExecutable(
 		: (env.PATH ?? "").split(delimiter).filter(Boolean).flatMap((dir) => extensions.map((extension) => join(dir, `${name}${extension}`)));
 	for (const candidate of candidates) {
 		try {
+			if (!statSync(candidate).isFile()) continue;
 			accessSync(candidate, constants.X_OK);
 			return candidate;
 		} catch {

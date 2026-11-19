@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +13,8 @@ function createPackedFixture({
 	includeServerExport = true,
 	includeServerTypes = true,
 	includeBin = true,
+	launcherMode = 0o755,
+	includePrepare = true,
 	defaultExport = "export default function gentleRetryExtension() {}",
 	serverDefaultExport = "export default { id: \"gentle-retry\", setup() {} };",
 } = {}) {
@@ -30,6 +32,7 @@ function createPackedFixture({
 			type: "module",
 			pi: includeMetadata ? { extensions: ["./dist/extension.js"] } : { extensions: [] },
 			...(includeBin ? { bin: { "gentle-retry": "./bin/gentle-retry.mjs" } } : {}),
+			...(includePrepare ? { scripts: { prepare: "pnpm run build" } } : {}),
 			exports: {
 				".": {
 					types: "./dist/index.d.ts",
@@ -47,7 +50,11 @@ function createPackedFixture({
 		}),
 	);
 	writeFileSync(join(extensionDirectory, "extension.js"), `${defaultExport}\n`);
-	writeFileSync(join(packageDirectory, "bin", "gentle-retry.mjs"), "#!/usr/bin/env node\n");
+	writeFileSync(join(packageDirectory, "bin", "gentle-retry.mjs"), "#!/usr/bin/env node\nif (process.argv.includes('--help')) console.log('Usage: gentle-retry');\n");
+	chmodSync(join(packageDirectory, "bin", "gentle-retry.mjs"), launcherMode);
+	writeFileSync(join(extensionDirectory, "launcher.js"), "export const buildLaunchPlan = () => {}; export const resolveLaunchCommand = () => {};\n");
+	writeFileSync(join(extensionDirectory, "retry-policy.js"), "export const resolveRetryPolicy = () => ({ autoResume: false });\n");
+	writeFileSync(join(extensionDirectory, "shell-integration.js"), "export const installShellIntegration = () => {}; export const removeShellIntegration = () => {};\n");
 	writeFileSync(join(extensionDirectory, "index.d.ts"), "export default () => void;\n");
 	writeFileSync(join(extensionDirectory, "opencode.js"), `${serverDefaultExport}\n`);
 	writeFileSync(join(extensionDirectory, "opencode.d.ts"), "export default { id: string; setup(): void };\n");
@@ -81,6 +88,24 @@ test("rejects a packed artifact without the launcher command", async () => {
 	const fixture = createPackedFixture({ includeBin: false });
 	try {
 		await assert.rejects(verifyPackedArtifact(fixture.tarballPath), /missing.*bin|launcher command/);
+	} finally {
+		rmSync(fixture.fixtureDirectory, { recursive: true, force: true });
+	}
+});
+
+test("rejects a package that cannot build during a fresh Git installation", async () => {
+	const fixture = createPackedFixture({ includePrepare: false });
+	try {
+		await assert.rejects(verifyPackedArtifact(fixture.tarballPath), /prepare/);
+	} finally {
+		rmSync(fixture.fixtureDirectory, { recursive: true, force: true });
+	}
+});
+
+test("rejects a packed launcher that is not executable", async () => {
+	const fixture = createPackedFixture({ launcherMode: 0o644 });
+	try {
+		await assert.rejects(verifyPackedArtifact(fixture.tarballPath), /not executable/);
 	} finally {
 		rmSync(fixture.fixtureDirectory, { recursive: true, force: true });
 	}

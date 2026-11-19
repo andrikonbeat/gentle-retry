@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { basename } from "node:path";
-import { homedir } from "node:os";
+import { constants as osConstants, homedir } from "node:os";
 import { buildLaunchPlan, resolveLaunchCommand } from "../dist/launcher.js";
 import { resolveRetryPolicy } from "../dist/retry-policy.js";
 import { installShellIntegration, removeShellIntegration } from "../dist/shell-integration.js";
@@ -28,7 +28,7 @@ function exitForResult(result) {
 		console.error(`gentle-retry: ${result.error.message}`);
 		return 1;
 	}
-	if (result.signal) return 128;
+	if (result.signal) return 128 + (osConstants.signals[result.signal] ?? 0);
 	return result.status ?? 1;
 }
 
@@ -56,6 +56,7 @@ function selectedShell(value) {
 }
 
 function setup(argv) {
+	if (process.platform === "win32") throw new Error("automatic shell integration supports Bash and Zsh on POSIX hosts");
 	const options = parseOptions(argv, ["--source", "--target", "--shell"]);
 	const shell = selectedShell(options["--shell"]);
 	const target = options["--target"] ?? "auto";

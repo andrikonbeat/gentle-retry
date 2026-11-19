@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -39,6 +39,29 @@ test("shell integration is idempotent, backed up and removable without touching 
 	assert.equal(removeShellIntegration({ homeDir: home, shell: "bash" }).changed, true);
 	assert.equal(readFileSync(file, "utf8"), "export KEEP=1\n");
 	assert.equal(readFileSync(first.backupPath, "utf8"), "export KEEP=1\n");
+});
+
+test("install and removal restore an original unterminated file byte-for-byte", (t) => {
+	const home = scratch(t);
+	const file = join(home, ".bashrc");
+	writeFileSync(file, "export KEEP=1");
+	installShellIntegration({ homeDir: home, shell: "bash", target: "gentle-shell" });
+	removeShellIntegration({ homeDir: home, shell: "bash" });
+	assert.equal(readFileSync(file, "utf8"), "export KEEP=1");
+});
+
+test("a symlinked shell file keeps its symlink and updates only its target", { skip: process.platform === "win32" }, (t) => {
+	const home = scratch(t);
+	const target = join(home, "dotfiles-bashrc");
+	const file = join(home, ".bashrc");
+	writeFileSync(target, "export KEEP=1\n");
+	symlinkSync(target, file);
+	installShellIntegration({ homeDir: home, shell: "bash", target: "gentle-shell" });
+	assert.equal(lstatSync(file).isSymbolicLink(), true);
+	assert.match(readFileSync(target, "utf8"), /gentle-retry auto-resume/);
+	removeShellIntegration({ homeDir: home, shell: "bash" });
+	assert.equal(lstatSync(file).isSymbolicLink(), true);
+	assert.equal(readFileSync(target, "utf8"), "export KEEP=1\n");
 });
 
 test("a malformed existing marker fails closed without changing the shell file", (t) => {

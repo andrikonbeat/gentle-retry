@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -50,6 +50,9 @@ export function assertPackageExports(packageJson) {
 export function assertLauncherCommand(packageJson) {
 	if (packageJson?.bin?.["gentle-retry"] !== LAUNCHER_PATH) {
 		throw new Error(`packed package is missing the launcher command bin entry for ${LAUNCHER_PATH}`);
+	}
+	if (typeof packageJson?.scripts?.prepare !== "string" || !packageJson.scripts.prepare.includes("build")) {
+		throw new Error("packed package is missing the prepare build required for a fresh Git installation");
 	}
 }
 
@@ -115,9 +118,15 @@ export async function verifyPackedArtifact(tarballPath) {
 		assertExtensionMetadata(packageJson);
 		assertPackageExports(packageJson);
 		assertLauncherCommand(packageJson);
-		if (!existsSync(join(extractionDirectory, "bin", "gentle-retry.mjs"))) {
+		const launcherPath = join(extractionDirectory, "bin", "gentle-retry.mjs");
+		if (!existsSync(launcherPath)) {
 			throw new Error(`packed package is missing the launcher executable: ${LAUNCHER_PATH}`);
 		}
+		if (process.platform !== "win32" && (statSync(launcherPath).mode & 0o111) === 0) {
+			throw new Error("packed launcher is not executable");
+		}
+		const help = execFileSync(process.execPath, [launcherPath, "--help"], { encoding: "utf8" });
+		if (!help.includes("Usage:")) throw new Error("packed launcher could not load and print its help");
 
 		const rootTypesPath = join(extractionDirectory, "dist", "index.d.ts");
 		const serverTypesPath = join(extractionDirectory, "dist", "opencode.d.ts");

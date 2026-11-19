@@ -37,6 +37,18 @@ test("the real launcher adds --continue for an opted-in ordinary TTY launch", { 
 	assert.match(result.stdout, /\{"args":\["--continue"\]\}/);
 });
 
+test("the launcher propagates ordinary and conventional signal exit codes", (t) => {
+	for (const [body, expected] of [["process.exit(42);", 42], ["process.kill(process.pid, 'SIGTERM');", 143]] as const) {
+		const f = fixture(t, false);
+		writeFileSync(join(f.targetDir, "gentle-shell"), `#!${process.execPath}\n${body}\n`);
+		chmodSync(join(f.targetDir, "gentle-shell"), 0o755);
+		const result = spawnSync(process.execPath, [binPath, "launch", "--target", "gentle-shell"], {
+			cwd: f.project, env: f.env, encoding: "utf8", timeout: 15000,
+		});
+		assert.equal(result.status, expected, result.stderr);
+	}
+});
+
 test("the real launcher preserves explicit arguments and disabled auto-resume", (t) => {
 	for (const autoResume of [true, false]) {
 		const f = fixture(t, autoResume);

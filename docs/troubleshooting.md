@@ -252,6 +252,27 @@ its context is dead. gentle-retry detects that and steps aside silently instead
 of failing your turn with an extension error. Start a new turn; the next failure
 retries normally.
 
+## Recovering the automatic launcher setup
+
+`gentle-retry uninstall` removes only the Bash/Zsh function block. The global
+command and the Pi extension remain installed. Remove them explicitly if you
+also want a full cleanup:
+
+```bash
+pi remove https://github.com/andrikonbeat/gentle-retry
+npm uninstall --global gentle-retry
+```
+
+Before the first shell-file change, setup preserves the original content in
+`.bashrc.gentle-retry-backup` or `.zshrc.gentle-retry-backup`. Restore that file
+manually if you need the original startup content back. A symlinked shell file
+is kept as a symlink: setup updates its target, never replaces the link itself.
+
+Setup installs the global command first and the Pi extension second. If the
+second step fails, the shell file is unchanged; use the two removal commands
+above if you do not want to keep that partial installation. If shell integration
+fails, both packages may already be installed and the same cleanup applies.
+
 ## Scripted and headless modes
 
 `pi -p`, JSON and RPC modes never receive the first-run notice, so they cannot
