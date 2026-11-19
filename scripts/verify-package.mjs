@@ -51,7 +51,7 @@ export function assertLauncherCommand(packageJson) {
 	if (packageJson?.bin?.["gentle-retry"] !== LAUNCHER_PATH) {
 		throw new Error(`packed package is missing the launcher command bin entry for ${LAUNCHER_PATH}`);
 	}
-	if (typeof packageJson?.scripts?.prepare !== "string" || !packageJson.scripts.prepare.includes("build")) {
+	if (typeof packageJson?.scripts?.prepare !== "string" || !/(?:build|tsc)/.test(packageJson.scripts.prepare)) {
 		throw new Error("packed package is missing the prepare build required for a fresh Git installation");
 	}
 }
