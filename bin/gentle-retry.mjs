@@ -57,6 +57,16 @@ function globalPiPackagePath() {
 	return join(result.stdout.trim(), "gentle-retry");
 }
 
+function replaceLegacyPiDeclaration() {
+	const result = spawnSync("pi", ["list"], { encoding: "utf8", env: process.env });
+	if (result.error || result.status !== 0) {
+		console.error(`gentle-retry: could not inspect Pi packages${result.error ? ` (${result.error.message})` : ""}`);
+		return 1;
+	}
+	if (!/^npm:gentle-retry\s*$/m.test(result.stdout)) return 0;
+	return run("pi", ["remove", "npm:gentle-retry"]);
+}
+
 function selectedShell(value) {
 	const shell = value ?? basename(process.env.SHELL || "bash");
 	if (shell !== "bash" && shell !== "zsh" && shell !== "fish") throw new Error("shell integration supports bash, zsh, and fish");
@@ -75,7 +85,9 @@ function setup(argv) {
 	if (run("npm", ["install", "--global", source ?? DEFAULT_SOURCE]) !== 0) return 1;
 	// The public path avoids a second Git fetch: Pi loads the exact package npm
 	// just installed. A custom local source remains useful for development.
-	if (run("pi", ["install", source ?? globalPiPackagePath()]) !== 0) return 1;
+	const piPackage = source ?? globalPiPackagePath();
+	if (replaceLegacyPiDeclaration() !== 0) return 1;
+	if (run("pi", ["install", piPackage]) !== 0) return 1;
 	const integrated = installShellIntegration({ homeDir: homedir(), shell, target: resolved.target });
 	console.log(`gentle-retry: ${integrated.changed ? "updated" : "already integrated in"} ${integrated.path}`);
 	console.log("Open a new terminal, then use gentle-retry auto-resume on. Bypass the launcher with 'command gentle-shell' or 'command pi'.");
