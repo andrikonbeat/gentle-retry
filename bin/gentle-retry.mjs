@@ -13,9 +13,9 @@ function help() {
 		"gentle-retry",
 		"",
 		"Usage:",
-		"  gentle-retry [setup] [--source <package>] [--target auto|gentle-shell|pi] [--shell bash|zsh]",
+		"  gentle-retry [setup] [--source <package>] [--target auto|gentle-shell|pi] [--shell bash|zsh|fish]",
 		"  gentle-retry launch [--target auto|gentle-shell|pi] [--] [Pi arguments]",
-		"  gentle-retry uninstall [--shell bash|zsh]",
+		"  gentle-retry uninstall [--shell bash|zsh|fish]",
 		"",
 		"Setup installs the global command and Pi extension, then integrates the selected shell.",
 		"An ordinary interactive launch adds --continue only when gentle-retry autoResume is enabled.",
@@ -59,7 +59,7 @@ function globalPiPackagePath() {
 
 function selectedShell(value) {
 	const shell = value ?? basename(process.env.SHELL || "bash");
-	if (shell !== "bash" && shell !== "zsh") throw new Error("shell integration supports bash and zsh");
+	if (shell !== "bash" && shell !== "zsh" && shell !== "fish") throw new Error("shell integration supports bash, zsh, and fish");
 	return shell;
 }
 

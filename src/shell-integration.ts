@@ -1,8 +1,8 @@
-import { constants, copyFileSync, existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { atomicWriteFileSync } from "./atomic-write.js";
 
-export type IntegrationShell = "bash" | "zsh";
+export type IntegrationShell = "bash" | "zsh" | "fish";
 export type IntegrationTarget = "gentle-shell" | "pi";
 
 const BEGIN_MARKER = "# >>> gentle-retry auto-resume >>>";
@@ -22,16 +22,17 @@ export interface ShellIntegrationResult {
 }
 
 function shellFile(input: ShellIntegrationInput): string {
+	if (input.shell === "fish") return join(input.homeDir, ".config", "fish", "config.fish");
 	return join(input.homeDir, input.shell === "bash" ? ".bashrc" : ".zshrc");
 }
 
-function renderBlock(target: IntegrationTarget, originalHadFinalNewline: boolean): string {
+function renderBlock(target: IntegrationTarget, originalHadFinalNewline: boolean, shell: IntegrationShell): string {
 	return [
 		BEGIN_MARKER,
 		`# original-final-newline: ${originalHadFinalNewline ? "yes" : "no"}`,
-		`${target}() {`,
-		`  command gentle-retry launch --target ${target} -- "$@"`,
-		"}",
+		...(shell === "fish"
+			? [`function ${target}`, `  command gentle-retry launch --target ${target} -- $argv`, "end"]
+			: [`${target}() {`, `  command gentle-retry launch --target ${target} -- "$@"`, "}"]),
 		END_MARKER,
 		"",
 	].join("\n");
@@ -55,9 +56,9 @@ function withoutExistingBlock(content: string): string {
 	return before + content.slice(content[afterMarker] === "\n" ? afterMarker + 1 : afterMarker);
 }
 
-function integratedContent(content: string, target: IntegrationTarget): string {
+function integratedContent(content: string, target: IntegrationTarget, shell: IntegrationShell): string {
 	const existing = withoutExistingBlock(content);
-	return `${existing}${existing.length > 0 && !existing.endsWith("\n") ? "\n" : ""}${renderBlock(target, existing.length === 0 || existing.endsWith("\n"))}`;
+	return `${existing}${existing.length > 0 && !existing.endsWith("\n") ? "\n" : ""}${renderBlock(target, existing.length === 0 || existing.endsWith("\n"), shell)}`;
 }
 
 function updateShellFile(input: ShellIntegrationInput, install: boolean): ShellIntegrationResult {
@@ -67,11 +68,12 @@ function updateShellFile(input: ShellIntegrationInput, install: boolean): ShellI
 	// Never replace a dotfiles-managed symlink: update its real target instead.
 	const writePath = isLink ? realpathSync(path) : path;
 	const current = existsSync(writePath) ? readFileSync(writePath, "utf8") : "";
-	const next = install ? integratedContent(current, input.target!) : withoutExistingBlock(current);
+	const next = install ? integratedContent(current, input.target!, input.shell) : withoutExistingBlock(current);
 	if (next === current) return { path, backupPath, changed: false };
 	if (install && existsSync(writePath) && !existsSync(backupPath)) {
 		copyFileSync(writePath, backupPath, constants.COPYFILE_EXCL);
 	}
+	mkdirSync(dirname(writePath), { recursive: true, mode: 0o700 });
 	atomicWriteFileSync(writePath, next, { mode: existsSync(writePath) ? statSync(writePath).mode : 0o600 });
 	return { path, backupPath, changed: true };
 }

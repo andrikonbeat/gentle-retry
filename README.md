@@ -22,18 +22,18 @@ only wastes your time.
 
 ### Complete automatic-resume setup from GitHub
 
-With Node/npm, Pi, and Bash or Zsh already installed, run:
+With Node/npm, Pi, and Bash, Zsh, or Fish already installed, run:
 
 ```bash
 npx --yes https://github.com/andrikonbeat/gentle-retry/releases/latest/download/gentle-retry.tgz
 ```
 
 That one command installs the global `gentle-retry` command and the Pi
-extension, then adds a small `gentle-shell()` (or `pi()`) function to your
-current shell's startup file. It does not modify Gentle Shell itself. The file
-write is atomic and idempotent, and the first change keeps a
-`.gentle-retry-backup` beside your shell file. Open a new terminal afterwards
-and enable `Auto-resume` once from `/gentle:retry`.
+extension, then adds a small `gentle-shell` (or `pi`) function to your current
+shell's startup file. It does not modify Gentle Shell itself. The file write is
+atomic and idempotent, and the first change keeps a `.gentle-retry-backup`
+beside your shell file. Open a new terminal afterwards and enable `Auto-resume`
+once from `/gentle:retry`.
 
 Use `command gentle-shell` or `command pi` to bypass the launcher. Run
 `gentle-retry uninstall` to remove only the shell integration; the global

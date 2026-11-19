@@ -71,6 +71,15 @@ test("an unset or empty SHELL falls back to Bash before changing any package", (
 	assert.match(readFileSync(join(f.home, ".bashrc"), "utf8"), /gentle-retry auto-resume/);
 });
 
+test("Fish uses config.fish and its native function syntax", (t) => {
+	const f = fixture(t);
+	f.env.SHELL = "/bin/fish";
+	const result = spawnSync(process.execPath, [binPath], { cwd: f.project, env: f.env, encoding: "utf8", timeout: 15000 });
+	assert.equal(result.status, 0, result.stderr);
+	const config = join(f.home, ".config", "fish", "config.fish");
+	assert.match(readFileSync(config, "utf8"), /function gentle-shell\n  command gentle-retry launch --target gentle-shell -- \$argv\nend/);
+});
+
 test("a failed global or Pi installation leaves shell startup unchanged", (t) => {
 	for (const failure of ["npm", "pi"] as const) {
 		const f = fixture(t, failure === "npm" ? { npmStatus: 1 } : { piStatus: 1 });
