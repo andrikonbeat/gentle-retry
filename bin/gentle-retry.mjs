@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { constants as osConstants, homedir } from "node:os";
 import { buildLaunchPlan, resolveLaunchCommand } from "../dist/launcher.js";
 import { resolveRetryPolicy } from "../dist/retry-policy.js";
 import { installShellIntegration, removeShellIntegration } from "../dist/shell-integration.js";
 
-const DEFAULT_SOURCE = "https://github.com/andrikonbeat/gentle-retry";
+const DEFAULT_SOURCE = "https://github.com/andrikonbeat/gentle-retry/archive/refs/heads/main.tar.gz";
 
 function help() {
 	return [
@@ -49,6 +49,14 @@ function run(command, args) {
 	return exitForResult(spawnSync(command, args, { stdio: "inherit", env: process.env }));
 }
 
+function globalPiPackagePath() {
+	const result = spawnSync("npm", ["root", "--global"], { encoding: "utf8", env: process.env });
+	if (result.error || result.status !== 0 || !result.stdout.trim()) {
+		throw new Error(result.error?.message ?? "npm root --global failed");
+	}
+	return join(result.stdout.trim(), "gentle-retry");
+}
+
 function selectedShell(value) {
 	const shell = value ?? basename(process.env.SHELL ?? "bash");
 	if (shell !== "bash" && shell !== "zsh") throw new Error("shell integration supports bash and zsh");
@@ -63,9 +71,11 @@ function setup(argv) {
 	if (!["auto", "gentle-shell", "pi"].includes(target)) throw new Error("--target must be auto, gentle-shell, or pi");
 	const resolved = resolveLaunchCommand(target);
 	if (!resolved) throw new Error(`could not find ${target === "auto" ? "gentle-shell or pi" : target} on PATH`);
-	const source = options["--source"] ?? DEFAULT_SOURCE;
-	if (run("npm", ["install", "--global", source]) !== 0) return 1;
-	if (run("pi", ["install", source]) !== 0) return 1;
+	const source = options["--source"];
+	if (run("npm", ["install", "--global", source ?? DEFAULT_SOURCE]) !== 0) return 1;
+	// The public path avoids a second Git fetch: Pi loads the exact package npm
+	// just installed. A custom local source remains useful for development.
+	if (run("pi", ["install", source ?? globalPiPackagePath()]) !== 0) return 1;
 	const integrated = installShellIntegration({ homeDir: homedir(), shell, target: resolved.target });
 	console.log(`gentle-retry: ${integrated.changed ? "updated" : "already integrated in"} ${integrated.path}`);
 	console.log("Open a new terminal, then use gentle-retry auto-resume on. Bypass the launcher with 'command gentle-shell' or 'command pi'.");

@@ -259,7 +259,7 @@ command and the Pi extension remain installed. Remove them explicitly if you
 also want a full cleanup:
 
 ```bash
-pi remove https://github.com/andrikonbeat/gentle-retry
+pi remove "$(npm root --global)/gentle-retry"
 npm uninstall --global gentle-retry
 ```
 

@@ -25,7 +25,7 @@ only wastes your time.
 With Node/npm, Pi, and Bash or Zsh already installed, run:
 
 ```bash
-npx --yes https://github.com/andrikonbeat/gentle-retry
+npx --yes https://github.com/andrikonbeat/gentle-retry/archive/refs/heads/main.tar.gz
 ```
 
 That one command installs the global `gentle-retry` command and the Pi

@@ -17,10 +17,10 @@ function fixture(t: test.TestContext, options: { npmStatus?: number; piStatus?: 
 	mkdirSync(bin, { recursive: true });
 	writeFileSync(join(home, ".bashrc"), "export KEEP=1\n");
 	for (const [name, status] of [["npm", options.npmStatus ?? 0], ["pi", options.piStatus ?? 0], ["gentle-shell", 0]] as const) {
-		writeFileSync(join(bin, name), `#!${process.execPath}\nconst fs = require('node:fs');\nfs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ name: ${JSON.stringify(name)}, args: process.argv.slice(2) }) + '\\n');\nprocess.exit(${status});\n`);
+		writeFileSync(join(bin, name), `#!${process.execPath}\nconst fs = require('node:fs');\nconst args = process.argv.slice(2);\nfs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ name: ${JSON.stringify(name)}, args }) + '\\n');\nif (args[0] === 'root') console.log(process.env.HOME + '/global');\nprocess.exit(${status});\n`);
 		chmodSync(join(bin, name), 0o755);
 	}
-	const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ""}` };
+	const env = { ...process.env, HOME: home, SHELL: "/bin/bash", PATH: `${bin}:${process.env.PATH ?? ""}` };
 	delete env.GENTLE_PI_CONFIG_HOME;
 	return { home, project, log, env };
 }
@@ -49,6 +49,18 @@ test("one-command setup installs both packages before adding an idempotent remov
 	const removed = spawnSync(process.execPath, [binPath, "uninstall", "--shell", "bash"], { cwd: f.project, env: f.env, encoding: "utf8" });
 	assert.equal(removed.status, 0, removed.stderr);
 	assert.equal(readFileSync(file, "utf8"), "export KEEP=1\n");
+});
+
+test("the public command uses a tarball and registers Pi from the global package without Git", (t) => {
+	const f = fixture(t);
+	const result = spawnSync(process.execPath, [binPath], { cwd: f.project, env: f.env, encoding: "utf8", timeout: 15000 });
+	assert.equal(result.status, 0, result.stderr);
+	const calls = readFileSync(f.log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+	assert.deepEqual(calls, [
+		{ name: "npm", args: ["install", "--global", "https://github.com/andrikonbeat/gentle-retry/archive/refs/heads/main.tar.gz"] },
+		{ name: "npm", args: ["root", "--global"] },
+		{ name: "pi", args: ["install", join(f.home, "global", "gentle-retry")] },
+	]);
 });
 
 test("a failed global or Pi installation leaves shell startup unchanged", (t) => {
